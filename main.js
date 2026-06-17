@@ -41,8 +41,12 @@ function defaultConfig() {
       '你不会假装自己是人类，也不会编造主人没说过的事。回答尽量一两句话。',
     // 纪念模式：用于已离世的宠物。开启后语气更轻柔克制，且明确「陪伴而非复活」。
     memorialMode: false,
-    // 点击互动按钮文案
-    buttons: ['摸摸头', '聊会儿', '休息一下'],
+    // 互动按钮：每个按钮绑定一个动作（action 对应素材里的某些帧）
+    buttons: [
+      { label: '摸摸头', action: 'pet' },
+      { label: '聊一会儿', action: 'chat' },
+      { label: '休息一下', action: 'rest' }
+    ],
     // 随机回应气泡（无 AI / 兜底时使用）
     responses: ['汪~ 在的！', '又在忙呀，记得喝水', '陪你一会儿', '我一直都在哦'],
     // 闲置气泡
@@ -73,6 +77,42 @@ function todayStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// 动作的可编辑键（与按钮 action 对应）
+const ACTION_KEYS = ['idle', 'pet', 'chat', 'rest', 'sleep'];
+
+// 新素材的默认动作映射：每个动作定格在一个单帧（静止，避免不连贯帧轮播导致“一抽一抽”）。
+// fps=0 表示不循环，只显示 frames[0]。
+function defaultActions(frameCount) {
+  const last = Math.max(0, (frameCount || 1) - 1);
+  const at = (i) => [Math.min(i, last)];
+  return {
+    idle:  { frames: at(0), fps: 0 },
+    pet:   { frames: at(1), fps: 0 },
+    chat:  { frames: at(2), fps: 0 },
+    rest:  { frames: at(3), fps: 0 },
+    sleep: { frames: [last], fps: 0 }
+  };
+}
+
+// 兼容旧数据：保证每个图片素材都有 actions；buttons 统一成 {label,action}
+function normalizeConfig(cfg) {
+  (cfg.assets || []).forEach((a) => {
+    if (a.type === 'image' && !a.actions) {
+      // 若有旧的 stateMap，用每段首帧迁移；否则用默认
+      if (a.stateMap) {
+        const f = (k, d) => ({ frames: [(a.stateMap[k] || [d])[0]], fps: 0 });
+        a.actions = { idle: f('idle', 0), pet: f('happy', 1), chat: f('happy', 2), rest: f('idle', 3), sleep: f('sleep', (a.frameCount || 1) - 1) };
+      } else {
+        a.actions = defaultActions(a.frameCount);
+      }
+    }
+  });
+  cfg.buttons = (cfg.buttons || []).map((b) =>
+    typeof b === 'string' ? { label: b, action: 'pet' } : b
+  );
+  return cfg;
+}
+
 // 跨天则重置当日统计（专注时长/番茄钟/互动按天计）
 function rolloverDaily(cfg) {
   const today = todayStr();
@@ -92,7 +132,7 @@ function loadConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
     // 合并默认值，保证新增字段不丢
-    return rolloverDaily(Object.assign(defaultConfig(), JSON.parse(raw)));
+    return normalizeConfig(rolloverDaily(Object.assign(defaultConfig(), JSON.parse(raw))));
   } catch (e) {
     console.error('config 解析失败，使用默认配置:', e);
     return rolloverDaily(defaultConfig());
@@ -373,15 +413,8 @@ ipcMain.handle('upload-asset', async () => {
     cols: 5,
     rows: 4,
     frameCount: 20,
-    // 状态 → 帧区间（含首尾）。默认按行划分。
-    stateMap: {
-      idle: [0, 4],
-      walk: [5, 9],
-      happy: [10, 14],
-      sleep: [15, 19]
-    },
-    // 是否是单帧静图 / 动图 / 视频（非精灵图）
-    animated: false
+    // 动作 → 帧映射：默认每个动作定格单帧（静止），可在后台可视化绑定
+    actions: defaultActions(20)
   };
 
   config.assets.push(asset);

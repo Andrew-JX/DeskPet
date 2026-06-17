@@ -67,7 +67,9 @@
     justify-content: center;
   }
   #pet:active { cursor: grabbing; }
-  #petCanvas { display: block; image-rendering: pixelated; }
+  /* 轻微“呼吸”，让定格的单帧姿势也有生命感（不靠帧循环） */
+  @keyframes breathe { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.02); } }
+  #petCanvas { display: block; image-rendering: pixelated; animation: breathe 3.2s ease-in-out infinite; }
   #placeholder {
     font-size: 90px;
     animation: bob 2.4s ease-in-out infinite;
@@ -238,6 +240,7 @@ async function loadAsset() {
     sizeCanvas();
     els.placeholder.style.display = 'none';
     els.canvas.style.display = 'block';
+    drawFrame(); // 立刻画出当前动作的定格帧
   };
   img.onerror = () => showPlaceholder();
   img.src = dataUrl;
@@ -255,39 +258,39 @@ function sizeCanvas() {
   els.canvas.height = size;
 }
 
-// ---- 状态机 → 帧区间 ----
-function frameRange() {
-  const map = currentAsset?.stateMap || {};
-  return map[state] || map.idle || [0, 0];
+// ---- 动作 → 帧 ----
+// 每个动作 = { frames:[...], fps }。单帧或 fps=0 → 定格静止（不轮播，解决“一抽一抽”）。
+function currentActionDef() {
+  const acts = (currentAsset && currentAsset.actions) ? currentAsset.actions : {};
+  return acts[state] || acts.idle || { frames: [0], fps: 0 };
 }
 
 function drawFrame() {
   if (!processedCanvas || !currentAsset) return;
-  const [start, end] = frameRange();
-  const total = end - start + 1;
-  const local = frameIndex % total;
-  const globalIdx = start + local;
+  const def = currentActionDef();
+  const frames = (def.frames && def.frames.length) ? def.frames : [0];
+  const idx = frames.length > 1 ? frames[frameIndex % frames.length] : frames[0];
   const cols = currentAsset.cols || 1;
-  const sx = (globalIdx % cols) * frameW;
-  const sy = Math.floor(globalIdx / cols) * frameH;
-
+  const sx = (idx % cols) * frameW;
+  const sy = Math.floor(idx / cols) * frameH;
   const size = els.canvas.width;
   ctx.clearRect(0, 0, size, size);
   ctx.drawImage(processedCanvas, sx, sy, frameW, frameH, 0, 0, size, size);
 }
 
 function setState(s) {
-  if (state !== s) { state = s; frameIndex = 0; }
+  if (state !== s) { state = s; frameIndex = 0; drawFrame(); }
 }
 
-// ---- 主循环 ----
+// ---- 主循环：单帧动作只画一次保持静止；多帧动作按各自 fps 循环 ----
 function tick(now) {
-  if (now - lastFrameTime > 1000 / FPS) {
+  const def = currentActionDef();
+  const animated = processedCanvas && def.fps > 0 && def.frames && def.frames.length > 1;
+  if (animated && now - lastFrameTime > 1000 / def.fps) {
     lastFrameTime = now;
     frameIndex++;
     drawFrame();
   }
-  // 占位宠物的睡觉表现：变成 😴
   if (!processedCanvas) {
     els.placeholder.textContent = state === 'sleep' ? '😴' : '🐶';
   }
@@ -320,11 +323,15 @@ setInterval(() => {
 // ---- 交互 ----
 function wake() { lastInteraction = Date.now(); if (state === 'sleep') setState('idle'); }
 
-async function petClicked() {
+// 播放某个动作一段时间后回到 idle
+function playAction(action, ms = 1600) {
   wake();
-  setState('happy');
-  setTimeout(() => { if (state === 'happy') setState('idle'); }, 1600);
-  // 点击时随机说一句（本地兜底，零延迟）
+  setState(action);
+  setTimeout(() => { if (state === action) setState('idle'); }, ms);
+}
+
+async function petClicked() {
+  playAction('pet'); // 直接点身体 = 摸摸头
   const pool = config?.responses || ['汪~'];
   say(pool[Math.floor(Math.random() * pool.length)]);
   window.api.statEvent('interaction');
@@ -349,7 +356,7 @@ els.chatInput.addEventListener('keydown', async (e) => {
   wake();
   hideConfirm();
   say('……', 60000);            // 思考中
-  setState('happy');
+  setState('chat');
   const res = await window.api.aiChat(text);
   say(res.text, 8000);
   // 写操作：弹出确认按钮，等用户拍板
@@ -357,7 +364,7 @@ els.chatInput.addEventListener('keydown', async (e) => {
     pendingProposalId = res.proposal.id;
     els.confirmRow.classList.add('show');
   }
-  setTimeout(() => { if (state === 'happy') setState('idle'); }, 1600);
+  setTimeout(() => { if (state === 'chat') setState('idle'); }, 1600);
 });
 
 els.confirmYes.addEventListener('click', async () => {
@@ -376,10 +383,18 @@ els.confirmNo.addEventListener('click', async () => {
 // ---- 互动按钮（来自 config.buttons） ----
 function renderToolbar() {
   els.toolbar.innerHTML = '';
-  (config?.buttons || []).forEach(label => {
+  (config?.buttons || []).forEach(btn => {
+    const label = typeof btn === 'string' ? btn : btn.label;
+    const action = typeof btn === 'string' ? 'pet' : (btn.action || 'pet');
     const b = document.createElement('button');
     b.textContent = label;
-    b.onclick = (ev) => { ev.stopPropagation(); petClicked(); };
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      playAction(action);                 // 播放该按钮绑定的动作
+      const pool = config?.responses || ['汪~'];
+      say(pool[Math.floor(Math.random() * pool.length)]);
+      window.api.statEvent('interaction');
+    };
     els.toolbar.appendChild(b);
   });
   // 固定一个「后台」入口
@@ -397,13 +412,13 @@ function setupPomodoro() {
   const p = config?.pomodoro;
   if (!p || !p.enabled) return;
   pomoTimer = setInterval(() => {
-    wake(); setState('happy');
+    wake(); setState('rest');
     window.api.statEvent('pomodoro');
     say(p.workEndMessage || '休息一下吧！', 6000);
-    setTimeout(() => { if (state === 'happy') setState('idle'); }, 2000);
+    setTimeout(() => { if (state === 'rest') setState('idle'); }, 2000);
   }, Math.max(1, p.workMinutes) * 60000);
   sitTimer = setInterval(() => {
-    wake(); setState('happy');
+    wake(); setState('rest');
     say(p.sitMessage || '起来走两步~', 6000);
   }, Math.max(1, p.sitReminderMinutes) * 60000);
 }

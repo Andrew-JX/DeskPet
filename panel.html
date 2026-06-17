@@ -70,6 +70,15 @@
   }
   .grid3 { display: flex; gap: 8px; }
   .grid3 > div { flex: 1; }
+  #actionTabs button { padding:5px 10px; font-size:12px; background:#222633; border:1px solid var(--line); border-radius:8px; }
+  #actionTabs button.active { background:var(--accent); color:#1a1a1a; font-weight:600; border-color:var(--accent); }
+  .frameCell { position:relative; border:2px solid var(--line); border-radius:6px; overflow:hidden; cursor:pointer; background:
+    linear-gradient(45deg,#23262f 25%,transparent 25%),linear-gradient(-45deg,#23262f 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#23262f 75%),linear-gradient(-45deg,transparent 75%,#23262f 75%);
+    background-size:12px 12px; background-position:0 0,0 6px,6px -6px,-6px 0; }
+  .frameCell.sel { border-color:var(--accent); }
+  .frameCell canvas { display:block; width:100%; height:auto; }
+  .frameCell .idx { position:absolute; top:1px; left:3px; font-size:9px; color:#bbb; text-shadow:0 0 2px #000; }
+  .frameCell .ord { position:absolute; bottom:1px; right:3px; font-size:11px; color:var(--accent); font-weight:700; text-shadow:0 0 2px #000; }
 </style>
 </head>
 <body>
@@ -87,21 +96,22 @@
     </div>
 
     <div id="gridEditor" style="display:none; margin-top:12px;">
-      <label>当前素材网格 & 状态映射</label>
       <div class="grid3">
         <div><label>列 cols</label><input type="number" id="cols" min="1"></div>
         <div><label>行 rows</label><input type="number" id="rows" min="1"></div>
-        <div><label>总帧 frames</label><input type="number" id="frameCount" min="1"></div>
+        <div><label>总帧</label><input type="number" id="frameCount" min="1"></div>
       </div>
-      <div class="grid3" style="margin-top:6px;">
-        <div><label>idle 区间</label><input type="text" id="s_idle" placeholder="0,4"></div>
-        <div><label>walk 区间</label><input type="text" id="s_walk" placeholder="5,9"></div>
+      <button class="ghost" id="applyGrid" style="margin-top:6px;">应用网格（重新切帧）</button>
+
+      <label style="margin-top:14px;">动作绑定：先选一个动作，再点下面的帧把它分配给该动作</label>
+      <div id="actionTabs"></div>
+      <div style="display:flex; align-items:center; gap:8px; margin:8px 0;">
+        <span style="font-size:12px; color:var(--muted)">该动作速度</span>
+        <input type="number" id="actionFps" min="0" max="24" style="width:64px;">
+        <span class="hint" style="margin:0;">单帧 / fps=0 → 定格不抽；多帧且 fps&gt;0 才循环</span>
       </div>
-      <div class="grid3" style="margin-top:6px;">
-        <div><label>happy 区间</label><input type="text" id="s_happy" placeholder="10,14"></div>
-        <div><label>sleep 区间</label><input type="text" id="s_sleep" placeholder="15,19"></div>
-      </div>
-      <button class="ghost" id="saveGrid" style="margin-top:8px;">应用网格设置</button>
+      <div id="frameGrid" style="display:grid; gap:5px;"></div>
+      <div class="hint" id="frameHint"></div>
     </div>
   </div>
 
@@ -128,9 +138,7 @@
     <textarea id="responses"></textarea>
     <label>闲置碎碎念（每行一句）</label>
     <textarea id="idleMessages"></textarea>
-    <label>互动按钮（每行一个）</label>
-    <textarea id="buttons"></textarea>
-    <div class="hint">已配置 ANTHROPIC_API_KEY 环境变量时走真实大模型；否则自动退回随机回应，演示不会空。</div>
+    <div class="hint">已配置 ANTHROPIC_API_KEY 环境变量时走真实大模型；否则自动退回随机回应，演示不会空。<br>互动按钮（摸摸头/聊一会儿/休息一下）对应的动作，在上面「动作绑定」里设置。</div>
   </div>
 
   <!-- 提醒 -->
@@ -197,42 +205,111 @@ function renderAssets() {
     div.appendChild(useBtn); div.appendChild(del);
     list.appendChild(div);
   });
-  renderGridEditor();
+  renderActionEditor();
 }
 
-function renderGridEditor() {
+// ---- 动作绑定编辑器：把精灵图的帧分配给各动作 ----
+const ACTION_LABELS = { idle:'待机', pet:'摸摸头', chat:'聊一会儿', rest:'休息一下', sleep:'睡觉' };
+let editingAction = 'idle';
+let petProcessed = null;   // 抠图后的整张图（按 assetId 缓存）
+
+function panelChromaKey(img) {
+  const off = document.createElement('canvas');
+  off.width = img.naturalWidth; off.height = img.naturalHeight;
+  const o = off.getContext('2d'); o.drawImage(img, 0, 0);
+  const d = o.getImageData(0, 0, off.width, off.height), p = d.data;
+  for (let i = 0; i < p.length; i += 4) { const r=p[i],g=p[i+1],b=p[i+2];
+    if (g > 90 && g > r*1.35 && g > b*1.35) p[i+3] = 0; }
+  o.putImageData(d, 0, 0); return off;
+}
+
+async function renderActionEditor() {
   const a = config.assets.find(x => x.id === config.currentAssetId);
-  if (!a) { $('gridEditor').style.display = 'none'; return; }
+  if (!a || a.type !== 'image') { $('gridEditor').style.display = 'none'; return; }
   $('gridEditor').style.display = 'block';
   $('cols').value = a.cols || 5;
   $('rows').value = a.rows || 4;
-  $('frameCount').value = a.frameCount || 20;
-  const m = a.stateMap || {};
-  $('s_idle').value = (m.idle || [0,4]).join(',');
-  $('s_walk').value = (m.walk || [5,9]).join(',');
-  $('s_happy').value = (m.happy || [10,14]).join(',');
-  $('s_sleep').value = (m.sleep || [15,19]).join(',');
+  $('frameCount').value = a.frameCount || (a.cols * a.rows) || 20;
+
+  $('actionTabs').innerHTML = '';
+  Object.keys(ACTION_LABELS).forEach(k => {
+    const b = document.createElement('button');
+    b.textContent = ACTION_LABELS[k];
+    if (k === editingAction) b.className = 'active';
+    b.onclick = () => { editingAction = k; renderActionEditor(); };
+    $('actionTabs').appendChild(b);
+  });
+  const act = (a.actions && a.actions[editingAction]) || { frames: [], fps: 0 };
+  $('actionFps').value = act.fps || 0;
+
+  if (!petProcessed || petProcessed._id !== a.id) {
+    const dataUrl = await window.api.readAssetData(a.id);
+    if (!dataUrl) { $('frameGrid').innerHTML = '<div class="hint">读取图片失败</div>'; return; }
+    await new Promise(res => {
+      const img = new Image();
+      img.onload = () => { petProcessed = panelChromaKey(img); petProcessed._id = a.id; res(); };
+      img.onerror = () => { petProcessed = null; res(); };
+      img.src = dataUrl;
+    });
+    if (!petProcessed) return;
+  }
+  renderFrames(a);
 }
 
-function parseRange(v, fb) {
-  const p = v.split(',').map(s => parseInt(s.trim(), 10));
-  return (p.length === 2 && !p.some(isNaN)) ? p : fb;
+function renderFrames(a) {
+  const cols = +$('cols').value || 5, rows = +$('rows').value || 4;
+  const fw = Math.floor(petProcessed.width / cols), fh = Math.floor(petProcessed.height / rows);
+  const total = cols * rows;
+  const sel = ((a.actions && a.actions[editingAction]) || { frames: [] }).frames || [];
+  const grid = $('frameGrid');
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  grid.innerHTML = '';
+  for (let i = 0; i < total; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'frameCell' + (sel.includes(i) ? ' sel' : '');
+    const cv = document.createElement('canvas');
+    cv.width = 60; cv.height = Math.max(1, Math.round(60 * fh / fw));
+    cv.getContext('2d').drawImage(petProcessed, (i%cols)*fw, Math.floor(i/cols)*fh, fw, fh, 0, 0, cv.width, cv.height);
+    cell.appendChild(cv);
+    const idx = document.createElement('div'); idx.className = 'idx'; idx.textContent = i; cell.appendChild(idx);
+    const ord = sel.indexOf(i);
+    if (ord >= 0) { const o = document.createElement('div'); o.className = 'ord'; o.textContent = ord + 1; cell.appendChild(o); }
+    cell.onclick = () => toggleFrame(a, i);
+    grid.appendChild(cell);
+  }
+  $('frameHint').textContent = sel.length
+    ? `「${ACTION_LABELS[editingAction]}」用帧：${sel.join(', ')}${sel.length > 1 ? '（按点击顺序循环，需设速度>0）' : '（单帧定格，不会抽）'}`
+    : `「${ACTION_LABELS[editingAction]}」还没分配帧，点上面的帧分配给它。`;
 }
 
-$('saveGrid').onclick = async () => {
+async function toggleFrame(a, i) {
+  a.actions = a.actions || {};
+  const act = a.actions[editingAction] || { frames: [], fps: 0 };
+  const fr = act.frames.slice();
+  const pos = fr.indexOf(i);
+  if (pos >= 0) fr.splice(pos, 1); else fr.push(i);
+  a.actions[editingAction] = { frames: fr, fps: +$('actionFps').value || 0 };
+  config = await window.api.updateAsset(a);
+  renderActionEditor();
+}
+
+$('actionFps').onchange = async () => {
   const a = config.assets.find(x => x.id === config.currentAssetId);
   if (!a) return;
-  const updated = Object.assign({}, a, {
-    cols: +$('cols').value, rows: +$('rows').value, frameCount: +$('frameCount').value,
-    stateMap: {
-      idle: parseRange($('s_idle').value, [0,4]),
-      walk: parseRange($('s_walk').value, [5,9]),
-      happy: parseRange($('s_happy').value, [10,14]),
-      sleep: parseRange($('s_sleep').value, [15,19])
-    }
-  });
-  config = await window.api.updateAsset(updated);
-  renderAll();
+  a.actions = a.actions || {};
+  const act = a.actions[editingAction] || { frames: [], fps: 0 };
+  a.actions[editingAction] = { frames: act.frames || [], fps: +$('actionFps').value || 0 };
+  config = await window.api.updateAsset(a);
+};
+
+$('applyGrid').onclick = async () => {
+  const a = config.assets.find(x => x.id === config.currentAssetId);
+  if (!a) return;
+  a.cols = +$('cols').value || 5;
+  a.rows = +$('rows').value || 4;
+  a.frameCount = +$('frameCount').value || (a.cols * a.rows);
+  config = await window.api.updateAsset(a);
+  renderActionEditor();
 };
 
 function renderForm() {
@@ -243,7 +320,6 @@ function renderForm() {
   $('persona').value = config.persona || '';
   $('responses').value = (config.responses || []).join('\n');
   $('idleMessages').value = (config.idleMessages || []).join('\n');
-  $('buttons').value = (config.buttons || []).join('\n');
   const p = config.pomodoro || {};
   $('pomoEnabled').checked = !!p.enabled;
   $('workMinutes').value = p.workMinutes || 25;
@@ -295,7 +371,6 @@ $('saveBtn').onclick = async () => {
     persona: $('persona').value,
     responses: lines($('responses').value),
     idleMessages: lines($('idleMessages').value),
-    buttons: lines($('buttons').value),
     pomodoro: {
       enabled: $('pomoEnabled').checked,
       workMinutes: +$('workMinutes').value,
