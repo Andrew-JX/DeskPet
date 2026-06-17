@@ -32,8 +32,12 @@ function ensureDirs() {
 function defaultConfig() {
   return {
     currentAssetId: null,
-    // 每个素材 = 一个宠物：{ id,name,type,file, cols,rows,frames,fps,  // 待机素材自身
-    //   interactions:[ {id,label,type,file,cols,rows,frames,fps} ] }  // 用户自定义互动，各带素材
+    // 素材库：可复用的素材描述符（整图 / 视频 / 从精灵图切出的单帧）
+    // { id, name, type:'image'|'video', file, cols, rows, frames, fps }
+    library: [],
+    // 每个宠物：{ id,name, type,file,cols,rows,frames,fps（待机素材描述符）,
+    //   interactions:[ {id,label, type,file,cols,rows,frames,fps} ] }
+    // 待机与互动的素材描述符都从素材库挑选后拷贝过来。
     assets: [],
     petSize: 180,
     petName: '豆豆',
@@ -88,8 +92,10 @@ function newInteraction(label) {
   return withMediaDefaults({ id: 'it_' + Date.now() + '_' + (interactionSeq++), label: label || '互动', type: null, file: null });
 }
 
-// 兼容旧数据：每个素材补上 interactions 与播放字段；清理旧的 actions/stateMap/buttons
+// 兼容旧数据：补上 library / interactions / 播放字段；清理旧的 actions/stateMap/buttons
 function normalizeConfig(cfg) {
+  if (!Array.isArray(cfg.library)) cfg.library = [];
+  cfg.library.forEach((m) => withMediaDefaults(m));
   (cfg.assets || []).forEach((a) => {
     withMediaDefaults(a);
     if (!Array.isArray(a.interactions)) a.interactions = [];
@@ -98,6 +104,22 @@ function normalizeConfig(cfg) {
   });
   delete cfg.buttons;
   return cfg;
+}
+
+// 一个素材文件是否仍被库或任何宠物/互动引用（决定删库项时要不要删文件）
+function fileStillReferenced(file, exceptLibId) {
+  if (!file) return false;
+  for (const m of (config.library || [])) { if (m.id !== exceptLibId && m.file === file) return true; }
+  for (const a of (config.assets || [])) {
+    if (a.file === file) return true;
+    for (const it of (a.interactions || [])) { if (it.file === file) return true; }
+  }
+  return false;
+}
+
+// 从描述符里只取播放相关字段（赋给待机/互动时用）
+function mediaDescriptor(m) {
+  return { type: m.type, file: m.file, cols: m.cols, rows: m.rows, frames: m.frames, fps: m.fps };
 }
 
 // 跨天则重置当日统计（专注时长/番茄钟/互动按天计）
@@ -408,15 +430,13 @@ ipcMain.handle('set-pet-size', (_e, size) => {
 // ---------------------------------------------------------------------------
 const findAsset = (id) => (config.assets || []).find((a) => a.id === id);
 
-// 新增宠物：弹框选「待机素材」，创建一个宠物并切为当前
-ipcMain.handle('add-pet', async () => {
-  const media = await pickAndCopyMedia('选择这个宠物的「待机」素材（图片或视频）');
-  if (!media) return null;
+// 新增宠物：创建一个空宠物（待机素材稍后从素材库挑），切为当前
+ipcMain.handle('add-pet', () => {
   const asset = withMediaDefaults({
     id: 'a_' + Date.now(),
-    name: media.name,
-    type: media.type,
-    file: media.file,
+    name: '新宠物',
+    type: null,
+    file: null,
     interactions: []
   });
   config.assets.push(asset);
@@ -426,12 +446,10 @@ ipcMain.handle('add-pet', async () => {
   return publicConfig();
 });
 
+// 删除宠物：素材文件归素材库共有，这里不删文件
 ipcMain.handle('delete-pet', (_e, id) => {
   const idx = config.assets.findIndex((a) => a.id === id);
   if (idx === -1) return publicConfig();
-  const asset = config.assets[idx];
-  removeMediaFile(asset.file);
-  (asset.interactions || []).forEach((it) => removeMediaFile(it.file));
   config.assets.splice(idx, 1);
   if (config.currentAssetId === id) {
     config.currentAssetId = config.assets.length ? config.assets[0].id : null;
@@ -454,24 +472,10 @@ ipcMain.handle('rename-pet', (_e, id, name) => {
   return publicConfig();
 });
 
-// 更换某个宠物的「待机」素材
-ipcMain.handle('replace-pet-media', async (_e, id) => {
+// 设置宠物「待机」素材（从素材库挑一个描述符拷过来）
+ipcMain.handle('set-pet-idle', (_e, id, descriptor) => {
   const a = findAsset(id);
-  if (!a) return publicConfig();
-  const media = await pickAndCopyMedia('选择「待机」素材（图片或视频）');
-  if (!media) return publicConfig();
-  removeMediaFile(a.file);
-  a.type = media.type; a.file = media.file; a.name = media.name;
-  withMediaDefaults(a);
-  saveConfig(config);
-  broadcastConfig();
-  return publicConfig();
-});
-
-// 改宠物/互动的播放字段（cols/rows/frames/fps）
-ipcMain.handle('update-asset', (_e, partial) => {
-  const a = findAsset(partial.id);
-  if (a) { Object.assign(a, partial); saveConfig(config); broadcastConfig(); }
+  if (a) { Object.assign(a, withMediaDefaults(Object.assign({}, descriptor))); saveConfig(config); broadcastConfig(); }
   return publicConfig();
 });
 
@@ -482,11 +486,12 @@ ipcMain.handle('add-interaction', (_e, assetId, label) => {
   return publicConfig();
 });
 
+// 删除互动：素材文件归素材库共有，不删文件
 ipcMain.handle('delete-interaction', (_e, assetId, interId) => {
   const a = findAsset(assetId);
   if (a) {
     const i = (a.interactions || []).findIndex((it) => it.id === interId);
-    if (i !== -1) { removeMediaFile(a.interactions[i].file); a.interactions.splice(i, 1); saveConfig(config); broadcastConfig(); }
+    if (i !== -1) { a.interactions.splice(i, 1); saveConfig(config); broadcastConfig(); }
   }
   return publicConfig();
 });
@@ -498,25 +503,68 @@ ipcMain.handle('rename-interaction', (_e, assetId, interId, label) => {
   return publicConfig();
 });
 
-ipcMain.handle('update-interaction', (_e, assetId, interId, partial) => {
+// 设置某个互动的素材（从素材库挑一个描述符拷过来）
+ipcMain.handle('set-interaction-material', (_e, assetId, interId, descriptor) => {
   const a = findAsset(assetId);
   const it = a && (a.interactions || []).find((x) => x.id === interId);
-  if (it) { Object.assign(it, partial); saveConfig(config); broadcastConfig(); }
+  if (it) {
+    const keepLabel = it.label, keepId = it.id;
+    Object.assign(it, withMediaDefaults(Object.assign({}, descriptor)), { label: keepLabel, id: keepId });
+    saveConfig(config); broadcastConfig();
+  }
   return publicConfig();
 });
 
-// 给某个互动上传/更换素材
-ipcMain.handle('upload-interaction-media', async (_e, assetId, interId) => {
-  const a = findAsset(assetId);
-  const it = a && (a.interactions || []).find((x) => x.id === interId);
-  if (!it) return publicConfig();
-  const media = await pickAndCopyMedia(`选择「${it.label}」的素材（图片或视频）`);
+// ---------------------------------------------------------------------------
+// IPC：素材库（library）—— 可复用素材，含从精灵图切出的单帧
+// ---------------------------------------------------------------------------
+const findLib = (id) => (config.library || []).find((m) => m.id === id);
+
+// 上传一个素材到库（整图 / 视频）
+ipcMain.handle('add-library-media', async () => {
+  const media = await pickAndCopyMedia('上传素材到库（图片或视频）');
   if (!media) return publicConfig();
-  removeMediaFile(it.file);
-  it.type = media.type; it.file = media.file;
-  withMediaDefaults(it);
+  config.library = config.library || [];
+  config.library.push(withMediaDefaults({
+    id: 'lib_' + Date.now(), name: media.name, type: media.type, file: media.file
+  }));
   saveConfig(config);
   broadcastConfig();
+  return publicConfig();
+});
+
+// 改库项的名字/网格（用于把图标成精灵图）
+ipcMain.handle('update-library-media', (_e, libId, partial) => {
+  const m = findLib(libId);
+  if (m) { Object.assign(m, partial); saveConfig(config); broadcastConfig(); }
+  return publicConfig();
+});
+
+// 从一张精灵图库项里切出某一格，作为新的单帧素材加入库
+ipcMain.handle('slice-library-frame', (_e, libId, index) => {
+  const m = findLib(libId);
+  if (m && m.type === 'image') {
+    config.library.push(withMediaDefaults({
+      id: 'lib_' + Date.now() + '_' + index,
+      name: `${m.name} #${index}`,
+      type: 'image', file: m.file,
+      cols: m.cols, rows: m.rows, frames: [index], fps: 0
+    }));
+    saveConfig(config);
+    broadcastConfig();
+  }
+  return publicConfig();
+});
+
+ipcMain.handle('delete-library-media', (_e, libId) => {
+  const idx = (config.library || []).findIndex((m) => m.id === libId);
+  if (idx !== -1) {
+    const m = config.library[idx];
+    config.library.splice(idx, 1);
+    if (!fileStillReferenced(m.file, libId)) removeMediaFile(m.file);
+    saveConfig(config);
+    broadcastConfig();
+  }
   return publicConfig();
 });
 

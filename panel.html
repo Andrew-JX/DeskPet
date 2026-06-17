@@ -85,51 +85,36 @@
   <h1>🐾 DeskPet 后台管理</h1>
   <div class="sub">管理宠物素材、人设与提醒 —— 保存后实时生效到桌面</div>
 
+  <!-- 素材库 -->
+  <div class="card">
+    <h2>素材库</h2>
+    <button class="primary" id="addLibBtn">+ 上传素材到库（图片 / 视频）</button>
+    <div class="hint">整图、视频，或一张含多动作的<b>绿底精灵图</b>都行。精灵图先设「列/行」，再点格子把要的帧切进库，供下面宠物挑选。</div>
+    <div id="libList" style="margin-top:10px;"></div>
+  </div>
+
   <!-- 宠物与互动 -->
   <div class="card">
     <h2>宠物与互动</h2>
     <div id="petList"></div>
-    <button class="primary" id="addPetBtn">+ 添加宠物（上传待机素材）</button>
-    <div class="hint">每个宠物 = 一段待机素材 + 若干你自定义的互动。可加多个宠物，桌面上点「使用」切换。</div>
+    <button class="primary" id="addPetBtn">+ 添加宠物</button>
+    <div class="hint">每个宠物 = 待机素材 + 若干自定义互动，素材都从上面「素材库」里挑。可加多个宠物，桌面点「使用」切换。</div>
 
     <div id="petEditor" style="display:none; margin-top:14px;">
       <label>宠物名字</label>
       <input type="text" id="petNameInput">
 
       <div style="margin-top:12px; padding:10px; border:1px solid var(--line); border-radius:8px;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <b style="font-size:12px;">待机素材（长时间没互动时的默认状态）</b>
-          <button class="ghost" id="replaceIdleBtn">更换</button>
-        </div>
-        <div class="hint" id="idleInfo" style="margin-top:4px;"></div>
-        <div id="idleSprite"></div>
+        <b style="font-size:12px;">待机素材（长时间没互动时的默认状态）</b>
+        <div class="hint" id="idleInfo" style="margin:4px 0;"></div>
+        <div id="idlePicker"></div>
       </div>
 
-      <label style="margin-top:14px;">互动（点桌宠上的按钮触发，播完自动回到待机）</label>
+      <label style="margin-top:14px;">互动（点桌宠按钮触发，播完自动回待机）</label>
       <div id="interList"></div>
       <button class="ghost" id="addInterBtn" style="margin-top:6px;">+ 添加互动</button>
-      <div class="hint">每个互动可改名、上传自己的素材（图或视频）。比如「摸摸头」放摇尾巴视频，「睡觉」放趴着的图。</div>
+      <div class="hint">给互动改个名（摸摸头 / 睡觉…），再从素材库选它的素材。没有就先去上面「上传素材到库」。</div>
     </div>
-  </div>
-
-  <!-- 生成视频提示词 -->
-  <div class="card">
-    <h2>让宠物“真的动起来”（生成循环视频）</h2>
-    <div class="hint" style="margin-top:0">帧切换不如视频顺滑。用 AI 把你的宠物图生成一段<b>绿底无缝循环</b>短视频，再从上面「上传素材」传进来，桌宠会<b>实时抠绿幕播放</b> —— 透明、丝滑、真动。</div>
-    <label>宠物描述（越具体越像）</label>
-    <input type="text" id="vpDesc" placeholder="例如：一只棕色柴犬，圆脸大眼">
-    <label>想要的动作</label>
-    <select id="vpMotion">
-      <option value="原地轻微呼吸起伏、偶尔眨眼">待机（呼吸 + 眨眼）</option>
-      <option value="开心地左右摇尾巴">摇尾巴</option>
-      <option value="缓慢眨眼并轻轻歪头">眨眼歪头</option>
-      <option value="开心地原地上下蹦跳">蹦跳</option>
-      <option value="原地踏步、走路循环">走路</option>
-    </select>
-    <label>生成提示词（复制到即梦 / 可灵 / Runway / Pika 等图生视频工具）</label>
-    <textarea id="vpPrompt" readonly style="min-height:128px"></textarea>
-    <button class="primary" id="vpCopy" style="margin-top:8px">复制提示词</button>
-    <div class="hint">要点：纯绿底(#00C800) · 正方形 · 主体居中 · 2–4 秒无缝循环 · 导出 mp4 或透明 webm · 体积尽量 ≤3MB。</div>
   </div>
 
   <!-- 基本设置 -->
@@ -198,62 +183,124 @@ let config = null;
 
 const $ = (id) => document.getElementById(id);
 
-function mediaLabel(type, file) {
-  if (!file) return '（未设置素材）';
-  return type === 'video' ? '🎬 视频素材' : '🖼 图片素材';
+function mediaLabel(m) {
+  if (!m || !m.file) return '（未设置素材）';
+  if (m.type === 'video') return '🎬 视频';
+  if (m.frames && m.frames.length > 1) return '🖼 动图';
+  if ((m.cols || 1) * (m.rows || 1) > 1) return `🖼 精灵帧 #${(m.frames || [0])[0]}`;
+  return '🖼 图片';
+}
+function sameMaterial(a, b) {
+  if (!a || !b || !a.file || !b.file) return false;
+  return a.file === b.file && a.type === b.type && JSON.stringify(a.frames || [0]) === JSON.stringify(b.frames || [0]);
+}
+
+// 素材库下拉选择器；选中后回调 descriptor（null=清空）
+function materialPicker(current, onPick) {
+  const sel = document.createElement('select');
+  const none = document.createElement('option'); none.value = ''; none.textContent = '（从素材库选择…）'; sel.appendChild(none);
+  (config.library || []).forEach((m, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = `${m.name} · ${mediaLabel(m).replace(/^[^ ]+ /, '')}`;
+    if (sameMaterial(current, m)) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.onchange = () => {
+    if (sel.value === '') return onPick(null);
+    const m = config.library[+sel.value];
+    onPick({ type: m.type, file: m.file, cols: m.cols, rows: m.rows, frames: m.frames, fps: m.fps });
+  };
+  return sel;
+}
+
+// ---- 素材库 ----
+const libProcessed = {}; // libId -> 抠图后的 canvas
+function panelChromaKey(img) {
+  const off = document.createElement('canvas');
+  off.width = img.naturalWidth; off.height = img.naturalHeight;
+  const o = off.getContext('2d'); o.drawImage(img, 0, 0);
+  const d = o.getImageData(0, 0, off.width, off.height), p = d.data;
+  for (let i = 0; i < p.length; i += 4) { const r = p[i], g = p[i+1], b = p[i+2];
+    if (g > 90 && g > r*1.35 && g > b*1.35) p[i+3] = 0; }
+  o.putImageData(d, 0, 0); return off;
+}
+async function getLibCanvas(m) {
+  if (libProcessed[m.id] && libProcessed[m.id]._file === m.file) return libProcessed[m.id];
+  const dataUrl = await window.api.readMedia(m.file);
+  if (!dataUrl) return null;
+  const cv = await new Promise(res => {
+    const img = new Image();
+    img.onload = () => { const c = panelChromaKey(img); c._file = m.file; res(c); };
+    img.onerror = () => res(null);
+    img.src = dataUrl;
+  });
+  if (cv) libProcessed[m.id] = cv;
+  return cv;
+}
+
+function renderLibrary() {
+  const list = $('libList'); list.innerHTML = '';
+  const lib = config.library || [];
+  if (!lib.length) { list.innerHTML = '<div class="hint">库是空的。点上面「上传素材到库」。</div>'; return; }
+  lib.forEach(m => {
+    const box = document.createElement('div');
+    box.style.cssText = 'border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;';
+    const top = document.createElement('div'); top.style.cssText = 'display:flex;gap:6px;align-items:center;';
+    const name = document.createElement('input'); name.type = 'text'; name.value = m.name; name.style.flex = '1';
+    name.onchange = async () => { config = await window.api.updateLibraryMedia(m.id, { name: name.value }); };
+    const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = mediaLabel(m);
+    const del = document.createElement('button'); del.className = 'danger'; del.textContent = '删除';
+    del.onclick = async () => { config = await window.api.deleteLibraryMedia(m.id); renderAll(); };
+    top.append(name, badge, del); box.appendChild(top);
+
+    // 仅“整张图片库项”可设网格切帧（已切出的单帧不再切）
+    const isWholeImage = m.type === 'image' && !(m.frames && m.frames.length === 1 && (m.cols * m.rows) > 1);
+    if (isWholeImage) {
+      const ctl = document.createElement('div'); ctl.style.cssText = 'display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap;';
+      const mk = (lbl, val) => { const l = document.createElement('label'); l.style.cssText = 'font-size:11px;color:var(--muted);margin:0;display:flex;gap:3px;align-items:center;'; const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.value = val; inp.style.width = '46px'; l.append(lbl, inp); ctl.appendChild(l); return inp; };
+      const cIn = mk('列', m.cols || 1), rIn = mk('行', m.rows || 1);
+      const apply = document.createElement('button'); apply.className = 'ghost'; apply.textContent = '应用网格'; apply.style.cssText = 'padding:3px 8px;font-size:11px;';
+      apply.onclick = async () => { config = await window.api.updateLibraryMedia(m.id, { cols: +cIn.value || 1, rows: +rIn.value || 1 }); renderAll(); };
+      ctl.append(apply); box.appendChild(ctl);
+
+      if ((m.cols * m.rows) > 1) {
+        const hint = document.createElement('div'); hint.className = 'hint'; hint.style.margin = '4px 0 0'; hint.textContent = '点格子 → 把该帧切进库（成为可挑选素材）'; box.appendChild(hint);
+        const grid = document.createElement('div'); grid.style.cssText = `display:grid;gap:4px;grid-template-columns:repeat(${m.cols},1fr);margin-top:6px;`; box.appendChild(grid);
+        getLibCanvas(m).then(cv => {
+          if (!cv) { grid.innerHTML = '<div class="hint">读取图片失败</div>'; return; }
+          const fw = Math.floor(cv.width / m.cols), fh = Math.floor(cv.height / m.rows);
+          for (let i = 0; i < m.cols * m.rows; i++) {
+            const cell = document.createElement('div'); cell.className = 'frameCell'; cell.title = '切到库';
+            const tc = document.createElement('canvas'); tc.width = 54; tc.height = Math.max(1, Math.round(54 * fh / fw));
+            tc.getContext('2d').drawImage(cv, (i % m.cols) * fw, Math.floor(i / m.cols) * fh, fw, fh, 0, 0, tc.width, tc.height);
+            cell.appendChild(tc);
+            const idx = document.createElement('div'); idx.className = 'idx'; idx.textContent = i; cell.appendChild(idx);
+            cell.onclick = async () => { config = await window.api.sliceLibraryFrame(m.id, i); renderAll(); };
+            grid.appendChild(cell);
+          }
+        });
+      }
+    }
+    list.appendChild(box);
+  });
 }
 
 function renderPets() {
-  const list = $('petList');
-  list.innerHTML = '';
+  const list = $('petList'); list.innerHTML = '';
   const pets = config.assets || [];
-  if (!pets.length) {
-    list.innerHTML = '<div class="hint">还没有宠物。点下面「添加宠物」，上传一段绿底待机素材（图或视频）。</div>';
-    $('petEditor').style.display = 'none';
-    return;
-  }
+  if (!pets.length) { list.innerHTML = '<div class="hint">还没有宠物。点「添加宠物」，再到下面给它选待机素材。</div>'; $('petEditor').style.display = 'none'; return; }
   pets.forEach(p => {
     const row = document.createElement('div');
     row.className = 'asset' + (p.id === config.currentAssetId ? ' active' : '');
     row.innerHTML = `<span class="name">${p.name || '宠物'}</span><span class="badge">${(p.interactions || []).length} 互动</span>`;
-    const use = document.createElement('button');
-    use.textContent = p.id === config.currentAssetId ? '使用中' : '使用';
-    use.className = p.id === config.currentAssetId ? 'primary' : 'ghost';
+    const use = document.createElement('button'); use.textContent = p.id === config.currentAssetId ? '使用中' : '使用'; use.className = p.id === config.currentAssetId ? 'primary' : 'ghost';
     use.onclick = async () => { config = await window.api.setCurrentAsset(p.id); renderAll(); };
-    const del = document.createElement('button');
-    del.textContent = '删除'; del.className = 'danger';
+    const del = document.createElement('button'); del.textContent = '删除'; del.className = 'danger';
     del.onclick = async () => { config = await window.api.deletePet(p.id); renderAll(); };
-    row.appendChild(use); row.appendChild(del);
-    list.appendChild(row);
+    row.append(use, del); list.appendChild(row);
   });
   renderPetEditor();
-}
-
-// 精灵图（可选）：图片素材想做成多帧动画时，设列/行/fps；视频不需要
-function spriteControls(target, mat) {
-  const wrap = document.createElement('div');
-  if (mat.type !== 'image' || !mat.file) return wrap;
-  wrap.style.cssText = 'display:flex; gap:6px; align-items:center; margin-top:6px; flex-wrap:wrap;';
-  const tip = document.createElement('span'); tip.className = 'hint'; tip.style.margin = '0'; tip.textContent = '精灵图(可选)：'; wrap.appendChild(tip);
-  const mk = (lbl, val) => {
-    const l = document.createElement('label');
-    l.style.cssText = 'font-size:11px;color:var(--muted);margin:0;display:flex;gap:3px;align-items:center;';
-    const inp = document.createElement('input'); inp.type = 'number'; inp.min = lbl === 'fps' ? '0' : '1'; inp.value = val; inp.style.width = '46px';
-    l.append(lbl, inp); wrap.appendChild(l); return inp;
-  };
-  const cIn = mk('列', mat.cols || 1), rIn = mk('行', mat.rows || 1), fIn = mk('fps', mat.fps || 0);
-  const apply = document.createElement('button');
-  apply.className = 'ghost'; apply.textContent = '应用'; apply.style.cssText = 'padding:3px 8px;font-size:11px;';
-  apply.onclick = async () => {
-    const c = +cIn.value || 1, r = +rIn.value || 1, f = +fIn.value || 0;
-    const frames = (c * r > 1) ? Array.from({ length: c * r }, (_, i) => i) : [0];
-    const partial = { cols: c, rows: r, fps: f, frames };
-    if (target.kind === 'idle') config = await window.api.updateAsset(Object.assign({ id: config.currentAssetId }, partial));
-    else config = await window.api.updateInteraction(config.currentAssetId, target.id, partial);
-    renderAll();
-  };
-  wrap.appendChild(apply);
-  return wrap;
 }
 
 function renderPetEditor() {
@@ -261,38 +308,36 @@ function renderPetEditor() {
   if (!p) { $('petEditor').style.display = 'none'; return; }
   $('petEditor').style.display = 'block';
   $('petNameInput').value = p.name || '';
-  $('idleInfo').textContent = mediaLabel(p.type, p.file);
-  $('idleSprite').innerHTML = '';
-  $('idleSprite').appendChild(spriteControls({ kind: 'idle' }, p));
+  $('idleInfo').textContent = '当前：' + mediaLabel(p);
+  $('idlePicker').innerHTML = '';
+  $('idlePicker').appendChild(materialPicker(p, async (desc) => {
+    config = await window.api.setPetIdle(config.currentAssetId, desc || { type: null, file: null });
+    renderAll();
+  }));
 
   const il = $('interList'); il.innerHTML = '';
   const inters = p.interactions || [];
-  if (!inters.length) {
-    il.innerHTML = '<div class="hint">还没有互动。点「添加互动」，改个名字（如 摸摸头 / 睡觉），再给它上传素材。</div>';
-    return;
-  }
+  if (!inters.length) { il.innerHTML = '<div class="hint">还没有互动。点「添加互动」。</div>'; return; }
   inters.forEach(it => {
-    const box = document.createElement('div');
-    box.style.cssText = 'border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;';
-    const top = document.createElement('div');
-    top.style.cssText = 'display:flex;gap:6px;align-items:center;';
+    const box = document.createElement('div'); box.style.cssText = 'border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;';
+    const top = document.createElement('div'); top.style.cssText = 'display:flex;gap:6px;align-items:center;';
     const name = document.createElement('input'); name.type = 'text'; name.value = it.label; name.style.flex = '1';
     name.onchange = async () => { config = await window.api.renameInteraction(config.currentAssetId, it.id, name.value); };
-    const up = document.createElement('button'); up.className = 'ghost'; up.textContent = it.file ? '更换素材' : '上传素材';
-    up.onclick = async () => { config = await window.api.uploadInteractionMedia(config.currentAssetId, it.id); renderAll(); };
     const del = document.createElement('button'); del.className = 'danger'; del.textContent = '删除';
     del.onclick = async () => { config = await window.api.deleteInteraction(config.currentAssetId, it.id); renderAll(); };
-    top.append(name, up, del);
-    const info = document.createElement('div'); info.className = 'hint'; info.style.margin = '4px 0 0';
-    info.textContent = it.file ? mediaLabel(it.type, it.file) : '（还没素材，点「上传素材」）';
-    box.append(top, info, spriteControls({ kind: 'inter', id: it.id }, it));
+    top.append(name, del); box.appendChild(top);
+    const info = document.createElement('div'); info.className = 'hint'; info.style.margin = '4px 0'; info.textContent = '素材：' + mediaLabel(it); box.appendChild(info);
+    box.appendChild(materialPicker(it, async (desc) => {
+      config = await window.api.setInteractionMaterial(config.currentAssetId, it.id, desc || { type: null, file: null });
+      renderAll();
+    }));
     il.appendChild(box);
   });
 }
 
-$('addPetBtn').onclick = async () => { const c = await window.api.addPet(); if (c) { config = c; renderAll(); } };
+$('addLibBtn').onclick = async () => { config = await window.api.addLibraryMedia(); renderAll(); };
+$('addPetBtn').onclick = async () => { config = await window.api.addPet(); renderAll(); };
 $('petNameInput').addEventListener('change', async () => { config = await window.api.renamePet(config.currentAssetId, $('petNameInput').value); });
-$('replaceIdleBtn').onclick = async () => { config = await window.api.replacePetMedia(config.currentAssetId); renderAll(); };
 $('addInterBtn').onclick = async () => { config = await window.api.addInteraction(config.currentAssetId, '新互动'); renderAll(); };
 
 function renderForm() {
@@ -342,31 +387,7 @@ function renderTrust() {
 
 $('clearTraceBtn').onclick = async () => { config = await window.api.clearTrace(); renderTrust(); };
 
-// ---- 图生视频提示词 ----
-function buildVideoPrompt() {
-  const desc = ($('vpDesc').value || '').trim() || '画面中的宠物';
-  const motion = $('vpMotion').value;
-  return [
-    `请以这张图片中的${desc}为主角，生成一段约 3 秒、可无缝循环的动画视频：${motion}。`,
-    '',
-    '硬性要求：',
-    '1) 纯绿色背景（#00C800），主体与背景边缘清晰，方便后续抠像；',
-    '2) 正方形构图，主体居中、完整不裁切；',
-    '3) 动作自然轻微，首尾画面一致、能无缝循环；',
-    '4) 画面只有宠物本身，不要文字、水印、人手或多余道具；',
-    '5) 时长 2–4 秒，分辨率 ≥512×512，导出 mp4 或带透明通道的 webm。'
-  ].join('\n');
-}
-function refreshVideoPrompt() { if ($('vpPrompt')) $('vpPrompt').value = buildVideoPrompt(); }
-['vpDesc', 'vpMotion'].forEach(id => { const el = $(id); if (el) el.addEventListener('input', refreshVideoPrompt); });
-if ($('vpCopy')) $('vpCopy').onclick = async () => {
-  try { await navigator.clipboard.writeText($('vpPrompt').value); }
-  catch (e) { $('vpPrompt').select(); document.execCommand('copy'); }
-  $('vpCopy').textContent = '✓ 已复制'; setTimeout(() => $('vpCopy').textContent = '复制提示词', 1200);
-};
-refreshVideoPrompt();
-
-function renderAll() { renderPets(); renderForm(); renderTrust(); }
+function renderAll() { renderLibrary(); renderPets(); renderForm(); renderTrust(); }
 
 const lines = (v) => v.split('\n').map(s => s.trim()).filter(Boolean);
 

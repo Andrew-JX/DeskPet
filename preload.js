@@ -15,14 +15,17 @@ contextBridge.exposeInMainWorld('api', {
   deletePet: (id) => ipcRenderer.invoke('delete-pet', id),
   setCurrentAsset: (id) => ipcRenderer.invoke('set-current-asset', id),
   renamePet: (id, name) => ipcRenderer.invoke('rename-pet', id, name),
-  replacePetMedia: (id) => ipcRenderer.invoke('replace-pet-media', id),
-  updateAsset: (partial) => ipcRenderer.invoke('update-asset', partial),
+  setPetIdle: (id, descriptor) => ipcRenderer.invoke('set-pet-idle', id, descriptor),
   // 互动
   addInteraction: (assetId, label) => ipcRenderer.invoke('add-interaction', assetId, label),
   deleteInteraction: (assetId, interId) => ipcRenderer.invoke('delete-interaction', assetId, interId),
   renameInteraction: (assetId, interId, label) => ipcRenderer.invoke('rename-interaction', assetId, interId, label),
-  updateInteraction: (assetId, interId, partial) => ipcRenderer.invoke('update-interaction', assetId, interId, partial),
-  uploadInteractionMedia: (assetId, interId) => ipcRenderer.invoke('upload-interaction-media', assetId, interId),
+  setInteractionMaterial: (assetId, interId, descriptor) => ipcRenderer.invoke('set-interaction-material', assetId, interId, descriptor),
+  // 素材库
+  addLibraryMedia: () => ipcRenderer.invoke('add-library-media'),
+  updateLibraryMedia: (libId, partial) => ipcRenderer.invoke('update-library-media', libId, partial),
+  sliceLibraryFrame: (libId, index) => ipcRenderer.invoke('slice-library-frame', libId, index),
+  deleteLibraryMedia: (libId) => ipcRenderer.invoke('delete-library-media', libId),
 
   movePet: (dx, dy) => ipcRenderer.invoke('move-pet', dx, dy),
   aiChat: (text) => ipcRenderer.invoke('ai-chat', text),
