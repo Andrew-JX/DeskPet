@@ -57,10 +57,9 @@
     border-bottom: 0;
   }
 
-  /* 宠物本体（可拖动窗口） */
+  /* 宠物本体（手动拖动，区分点击/拖拽） */
   #pet {
     position: relative;
-    -webkit-app-region: drag;
     cursor: grab;
     display: flex;
     align-items: center;
@@ -80,29 +79,39 @@
     50% { transform: translateY(-8px); }
   }
 
-  /* 悬停互动条 */
+  /* 点击宠物弹出的菜单（互动 + 小工具） */
   #toolbar {
-    -webkit-app-region: no-drag;
-    display: flex;
+    display: none;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 6px;
     margin-top: 6px;
-    opacity: 0;
-    transition: opacity .15s;
-    pointer-events: none;
+    max-width: 100%;
   }
-  #stage:hover #toolbar { opacity: 1; pointer-events: auto; }
+  #toolbar.open { display: flex; }
   #toolbar button {
-    -webkit-app-region: no-drag;
     border: none;
     border-radius: 12px;
     padding: 4px 9px;
     font-size: 11px;
-    background: rgba(255,255,255,0.9);
+    background: rgba(255,255,255,0.92);
     color: #333;
     cursor: pointer;
     box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    white-space: nowrap;
   }
   #toolbar button:hover { background: var(--accent); color: #fff; }
+
+  /* 番茄钟倒计时角标 */
+  #pomoBadge {
+    position: absolute;
+    top: -6px; right: -6px;
+    background: var(--accent); color: #1a1a1a; font-weight: 700;
+    font-size: 11px; padding: 2px 7px; border-radius: 10px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    display: none;
+  }
+  #pomoBadge.show { display: block; }
 
   /* 迷你聊天输入 */
   #chatRow {
@@ -147,6 +156,7 @@
     <div id="pet">
       <canvas id="petCanvas" width="180" height="180" style="display:none"></canvas>
       <div id="placeholder">🐶</div>
+      <div id="pomoBadge"></div>
     </div>
     <div id="toolbar"></div>
     <div id="chatRow">
@@ -182,8 +192,10 @@ const els = {
   chatInput: document.getElementById('chatInput'),
   confirmRow: document.getElementById('confirmRow'),
   confirmYes: document.getElementById('confirmYes'),
-  confirmNo: document.getElementById('confirmNo')
+  confirmNo: document.getElementById('confirmNo'),
+  pomoBadge: document.getElementById('pomoBadge')
 };
+let menuOpen = false;
 let pendingProposalId = null;
 const ctx = els.canvas.getContext('2d');
 
@@ -360,20 +372,46 @@ function playInteraction(it) {
   returnTimer = setTimeout(() => { if (playingInterId === it.id) showIdle(); }, 4000);
 }
 
-async function petClicked() {
+// ---- 点击宠物弹出的菜单 ----
+function openMenu() { menuOpen = true; renderToolbar(); els.toolbar.classList.add('open'); }
+function closeMenu() { menuOpen = false; els.toolbar.classList.remove('open'); els.chatRow.classList.remove('show'); }
+function toggleMenu() { menuOpen ? closeMenu() : openMenu(); }
+
+function onPetClick() {
   lastInteraction = Date.now();
   window.api.statEvent('interaction');
-  const pool = config?.responses || ['汪~'];
-  say(pool[Math.floor(Math.random() * pool.length)]);
+  toggleMenu();
+  if (menuOpen) { const pool = config?.responses || ['汪~']; say(pool[Math.floor(Math.random() * pool.length)]); }
 }
 
-els.pet.addEventListener('click', petClicked);
+// ---- 手动拖动 + 点击判定：拖动时静默移动，几乎没动才算点击 ----
+let dragging = false, lastSX = 0, lastSY = 0, movedDist = 0;
+els.pet.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  dragging = true; movedDist = 0; lastSX = e.screenX; lastSY = e.screenY;
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const dx = e.screenX - lastSX, dy = e.screenY - lastSY;
+  if (dx || dy) {
+    movedDist += Math.abs(dx) + Math.abs(dy);
+    if (movedDist > 4) window.api.movePet(dx, dy);
+    lastSX = e.screenX; lastSY = e.screenY;
+  }
+});
+document.addEventListener('mouseup', (e) => {
+  if (!dragging) return;
+  dragging = false;
+  if (e.button === 0 && movedDist <= 4) onPetClick(); // 几乎没动 = 点击
+});
 
-// 双击宠物 → 打开聊天输入
-els.pet.addEventListener('dblclick', () => {
-  lastInteraction = Date.now();
-  els.chatRow.classList.toggle('show');
-  if (els.chatRow.classList.contains('show')) els.chatInput.focus();
+// 点菜单 / 宠物以外的地方 → 收起菜单
+document.addEventListener('mousedown', (e) => {
+  if (!menuOpen) return;
+  if (els.pet.contains(e.target) || els.toolbar.contains(e.target) ||
+      els.chatRow.contains(e.target) || els.confirmRow.contains(e.target)) return;
+  closeMenu();
 });
 
 function hideConfirm() { els.confirmRow.classList.remove('show'); pendingProposalId = null; }
@@ -408,37 +446,66 @@ els.confirmNo.addEventListener('click', async () => {
   say(res.text, 3000);
 });
 
-// ---- 互动按钮（来自当前宠物的 interactions）----
+// ---- 菜单内容：互动 + 小工具 ----
+function mkBtn(text) { const b = document.createElement('button'); b.textContent = text; return b; }
 function renderToolbar() {
   els.toolbar.innerHTML = '';
   const inters = (currentAsset && currentAsset.interactions) || [];
   inters.forEach(it => {
-    const b = document.createElement('button');
-    b.textContent = it.label;
-    b.onclick = (ev) => { ev.stopPropagation(); playInteraction(it); };
+    const b = mkBtn(it.label);
+    b.onclick = (e) => { e.stopPropagation(); playInteraction(it); };
     els.toolbar.appendChild(b);
   });
-  // 固定一个「后台」入口
-  const gear = document.createElement('button');
-  gear.textContent = '⚙';
-  gear.title = '后台管理';
-  gear.onclick = (ev) => { ev.stopPropagation(); window.api.openPanel(); };
+  const tomato = mkBtn(pomoEndAt ? '⏹ 停止专注' : '🍅 番茄钟');
+  tomato.onclick = (e) => { e.stopPropagation(); togglePomodoro(); };
+  els.toolbar.appendChild(tomato);
+  const sit = mkBtn(sitOn ? '💧 久坐·开' : '💧 久坐');
+  sit.onclick = (e) => { e.stopPropagation(); toggleSit(); };
+  els.toolbar.appendChild(sit);
+  const chat = mkBtn('💬 聊天');
+  chat.onclick = (e) => { e.stopPropagation(); els.chatRow.classList.add('show'); els.chatInput.focus(); };
+  els.toolbar.appendChild(chat);
+  const gear = mkBtn('⚙'); gear.title = '后台';
+  gear.onclick = (e) => { e.stopPropagation(); window.api.openPanel(); };
   els.toolbar.appendChild(gear);
 }
 
-// ---- 番茄钟 / 久坐提醒 ----
-let pomoTimer = null, sitTimer = null;
-function setupPomodoro() {
-  clearInterval(pomoTimer); clearInterval(sitTimer);
-  const p = config?.pomodoro;
-  if (!p || !p.enabled) return;
-  pomoTimer = setInterval(() => {
-    window.api.statEvent('pomodoro');
-    say(p.workEndMessage || '休息一下吧！', 6000);
-  }, Math.max(1, p.workMinutes) * 60000);
-  sitTimer = setInterval(() => {
-    say(p.sitMessage || '起来走两步~', 6000);
-  }, Math.max(1, p.sitReminderMinutes) * 60000);
+// ---- 小工具：番茄钟（带倒计时角标）/ 久坐提醒，均由用户主动开启 ----
+let pomoEndAt = 0, pomoTick = null, sitOn = false, sitTimer = null;
+function fmtTime(s) { const m = Math.floor(s / 60), ss = s % 60; return `${m}:${String(ss).padStart(2, '0')}`; }
+function updatePomoBadge() {
+  const left = Math.max(0, Math.round((pomoEndAt - Date.now()) / 1000));
+  els.pomoBadge.textContent = '🍅 ' + fmtTime(left);
+  els.pomoBadge.classList.add('show');
+}
+function stopPomodoro() {
+  clearInterval(pomoTick); pomoTick = null; pomoEndAt = 0;
+  els.pomoBadge.classList.remove('show');
+  renderToolbar();
+}
+function togglePomodoro() {
+  if (pomoEndAt) { stopPomodoro(); say('好，先停一下~'); return; }
+  const mins = Math.max(1, (config?.pomodoro?.workMinutes) || 25);
+  pomoEndAt = Date.now() + mins * 60000;
+  say(`开始专注 ${mins} 分钟，我陪你~`);
+  updatePomoBadge();
+  pomoTick = setInterval(() => {
+    if (Date.now() >= pomoEndAt) {
+      const msg = config?.pomodoro?.workEndMessage || '一个番茄钟到啦，起来活动一下！';
+      stopPomodoro(); say(msg, 6000); window.api.statEvent('pomodoro');
+    } else updatePomoBadge();
+  }, 1000);
+  renderToolbar();
+}
+function toggleSit() {
+  if (sitOn) { clearInterval(sitTimer); sitTimer = null; sitOn = false; say('久坐提醒关啦'); }
+  else {
+    sitOn = true;
+    const mins = Math.max(1, (config?.pomodoro?.sitReminderMinutes) || 45);
+    sitTimer = setInterval(() => say(config?.pomodoro?.sitMessage || '坐久啦，起来走两步~', 6000), mins * 60000);
+    say(`久坐提醒开啦，每 ${mins} 分钟叫你一次`);
+  }
+  renderToolbar();
 }
 
 // ---- 配置签名：只有宠物/素材/尺寸真正变化时才重载，避免统计广播导致视频不停重启 ----
@@ -450,18 +517,14 @@ function petSignature(cfg) {
       it: (a.interactions || []).map(i => [i.id, i.label, i.type, i.file, i.cols, i.rows, i.frames, i.fps]) } : null
   });
 }
-function pomoSignature(cfg) { return JSON.stringify((cfg && cfg.pomodoro) || {}); }
-let lastPetSig = '', lastPomoSig = '';
+let lastPetSig = '';
 
 // ---- 初始化 ----
 async function init() {
   config = await window.api.getConfig();
   lastPetSig = petSignature(config);
-  lastPomoSig = pomoSignature(config);
   sizeCanvas();
   loadCurrentPet();
-  renderToolbar();
-  setupPomodoro();
   requestAnimationFrame(tick);
   // 开场打个招呼
   setTimeout(() => say(`嗨，我是${currentAsset?.name || config?.petName || '它'}，今天也一起加油~`), 800);
@@ -474,10 +537,8 @@ window.api.onConfigUpdated((cfg) => {
     lastPetSig = sig;
     sizeCanvas();
     loadCurrentPet();
-    renderToolbar();
+    if (menuOpen) renderToolbar();
   }
-  const psig = pomoSignature(cfg);
-  if (psig !== lastPomoSig) { lastPomoSig = psig; setupPomodoro(); }
 });
 
 init();
