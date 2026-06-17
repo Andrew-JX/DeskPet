@@ -1,0 +1,55 @@
+{
+  "name": "deskpet",
+  "version": "0.1.0",
+  "description": "把你的宠物变成陪你上班的桌面伙伴 —— 可信、可换皮、可扩展的桌宠 Agent",
+  "main": "main.js",
+  "author": "Andrew-JX",
+  "license": "MIT",
+  "homepage": "https://github.com/Andrew-JX/DeskPet",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Andrew-JX/DeskPet.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.andrewjx.deskpet",
+    "productName": "DeskPet",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "pet.html",
+      "panel.html",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "DeskPet"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

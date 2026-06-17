@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>DeskPet</title>
+<style>
+  :root {
+    --bubble-bg: rgba(28, 28, 34, 0.92);
+    --bubble-fg: #f4f4f6;
+    --accent: #ffb74d;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #stage {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
+  }
+
+  /* 气泡 */
+  #bubble {
+    max-width: 200px;
+    margin-bottom: 6px;
+    padding: 8px 12px;
+    background: var(--bubble-bg);
+    color: var(--bubble-fg);
+    border-radius: 14px;
+    font-size: 13px;
+    line-height: 1.4;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity .2s, transform .2s;
+    pointer-events: none;
+    text-align: center;
+    word-break: break-word;
+  }
+  #bubble.show { opacity: 1; transform: translateY(0); }
+  #bubble::after {
+    content: "";
+    position: absolute;
+    left: 50%; transform: translateX(-50%);
+    bottom: -5px;
+    border: 6px solid transparent;
+    border-top-color: var(--bubble-bg);
+    border-bottom: 0;
+  }
+
+  /* 宠物本体（可拖动窗口） */
+  #pet {
+    position: relative;
+    -webkit-app-region: drag;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #pet:active { cursor: grabbing; }
+  #petCanvas { display: block; image-rendering: pixelated; }
+  #placeholder {
+    font-size: 90px;
+    animation: bob 2.4s ease-in-out infinite;
+  }
+  @keyframes bob {
+    0%,100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+  }
+
+  /* 悬停互动条 */
+  #toolbar {
+    -webkit-app-region: no-drag;
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    opacity: 0;
+    transition: opacity .15s;
+    pointer-events: none;
+  }
+  #stage:hover #toolbar { opacity: 1; pointer-events: auto; }
+  #toolbar button {
+    -webkit-app-region: no-drag;
+    border: none;
+    border-radius: 12px;
+    padding: 4px 9px;
+    font-size: 11px;
+    background: rgba(255,255,255,0.9);
+    color: #333;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  }
+  #toolbar button:hover { background: var(--accent); color: #fff; }
+
+  /* 迷你聊天输入 */
+  #chatRow {
+    -webkit-app-region: no-drag;
+    display: none;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  #chatRow.show { display: flex; }
+  #chatInput {
+    -webkit-app-region: no-drag;
+    width: 150px;
+    border: none;
+    border-radius: 12px;
+    padding: 5px 10px;
+    font-size: 12px;
+    outline: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="bubble"></div>
+    <div id="pet">
+      <canvas id="petCanvas" width="180" height="180" style="display:none"></canvas>
+      <div id="placeholder">🐶</div>
+    </div>
+    <div id="toolbar"></div>
+    <div id="chatRow">
+      <input id="chatInput" type="text" placeholder="和我说点什么…" />
+    </div>
+  </div>
+
+<script>
+let config = null;
+let currentAsset = null;
+let processedCanvas = null;   // 抠图后的整张精灵图
+let frameW = 0, frameH = 0;
+
+let state = 'idle';
+let frameIndex = 0;
+let lastFrameTime = 0;
+const FPS = 6;
+
+let lastInteraction = Date.now();
+let bubbleTimer = null;
+
+const els = {
+  bubble: document.getElementById('bubble'),
+  pet: document.getElementById('pet'),
+  canvas: document.getElementById('petCanvas'),
+  placeholder: document.getElementById('placeholder'),
+  toolbar: document.getElementById('toolbar'),
+  chatRow: document.getElementById('chatRow'),
+  chatInput: document.getElementById('chatInput')
+};
+const ctx = els.canvas.getContext('2d');
+
+// ---- 气泡 ----
+function say(text, ms = 3500) {
+  els.bubble.textContent = text;
+  els.bubble.classList.add('show');
+  clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => els.bubble.classList.remove('show'), ms);
+}
+
+// ---- 绿幕抠图：把精灵图里的绿底变透明 ----
+function chromaKey(img) {
+  const off = document.createElement('canvas');
+  off.width = img.naturalWidth;
+  off.height = img.naturalHeight;
+  const octx = off.getContext('2d');
+  octx.drawImage(img, 0, 0);
+  const data = octx.getImageData(0, 0, off.width, off.height);
+  const px = data.data;
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i], g = px[i + 1], b = px[i + 2];
+    // 绿色主导 → 透明（阈值偏宽容，覆盖常见绿幕）
+    if (g > 90 && g > r * 1.35 && g > b * 1.35) {
+      px[i + 3] = 0;
+    }
+  }
+  octx.putImageData(data, 0, 0);
+  return off;
+}
+
+// ---- 加载当前素材 ----
+async function loadAsset() {
+  currentAsset = null;
+  processedCanvas = null;
+  if (!config || !config.currentAssetId) { showPlaceholder(); return; }
+  const asset = config.assets.find(a => a.id === config.currentAssetId);
+  if (!asset) { showPlaceholder(); return; }
+  currentAsset = asset;
+
+  if (asset.type !== 'image') {
+    // 视频/动图：MVP 阶段先用占位，后续可换 <video>/<img>
+    showPlaceholder();
+    return;
+  }
+
+  // 取 data URL（同源，避免 canvas 被污染），再做绿幕抠图
+  const dataUrl = await window.api.readAssetData(asset.id);
+  if (!dataUrl) { showPlaceholder(); return; }
+  const img = new Image();
+  img.onload = () => {
+    processedCanvas = chromaKey(img);
+    frameW = Math.floor(processedCanvas.width / (asset.cols || 1));
+    frameH = Math.floor(processedCanvas.height / (asset.rows || 1));
+    sizeCanvas();
+    els.placeholder.style.display = 'none';
+    els.canvas.style.display = 'block';
+  };
+  img.onerror = () => showPlaceholder();
+  img.src = dataUrl;
+}
+
+function showPlaceholder() {
+  els.canvas.style.display = 'none';
+  els.placeholder.style.display = 'block';
+  els.placeholder.style.fontSize = ((config?.petSize || 180) * 0.5) + 'px';
+}
+
+function sizeCanvas() {
+  const size = (config?.petSize || 180);
+  els.canvas.width = size;
+  els.canvas.height = size;
+}
+
+// ---- 状态机 → 帧区间 ----
+function frameRange() {
+  const map = currentAsset?.stateMap || {};
+  return map[state] || map.idle || [0, 0];
+}
+
+function drawFrame() {
+  if (!processedCanvas || !currentAsset) return;
+  const [start, end] = frameRange();
+  const total = end - start + 1;
+  const local = frameIndex % total;
+  const globalIdx = start + local;
+  const cols = currentAsset.cols || 1;
+  const sx = (globalIdx % cols) * frameW;
+  const sy = Math.floor(globalIdx / cols) * frameH;
+
+  const size = els.canvas.width;
+  ctx.clearRect(0, 0, size, size);
+  ctx.drawImage(processedCanvas, sx, sy, frameW, frameH, 0, 0, size, size);
+}
+
+function setState(s) {
+  if (state !== s) { state = s; frameIndex = 0; }
+}
+
+// ---- 主循环 ----
+function tick(now) {
+  if (now - lastFrameTime > 1000 / FPS) {
+    lastFrameTime = now;
+    frameIndex++;
+    drawFrame();
+  }
+  // 占位宠物的睡觉表现：变成 😴
+  if (!processedCanvas) {
+    els.placeholder.textContent = state === 'sleep' ? '😴' : '🐶';
+  }
+  // 闲置 → 睡觉
+  if (state === 'idle' && Date.now() - lastInteraction > 30000) {
+    setState('sleep');
+    const msgs = config?.idleMessages || [];
+    if (msgs.length && Math.random() < 0.3) say(msgs[Math.floor(Math.random() * msgs.length)]);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ---- 偶尔散步（移动窗口） ----
+setInterval(() => {
+  if (state !== 'idle') return;
+  if (Math.random() < 0.4) {
+    setState('walk');
+    let steps = 0;
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const walk = setInterval(() => {
+      window.api.movePet(dir * 8, 0);
+      if (++steps > 12) {
+        clearInterval(walk);
+        setState('idle');
+      }
+    }, 90);
+  }
+}, 18000);
+
+// ---- 交互 ----
+function wake() { lastInteraction = Date.now(); if (state === 'sleep') setState('idle'); }
+
+async function petClicked() {
+  wake();
+  setState('happy');
+  setTimeout(() => { if (state === 'happy') setState('idle'); }, 1600);
+  // 点击时随机说一句（本地兜底，零延迟）
+  const pool = config?.responses || ['汪~'];
+  say(pool[Math.floor(Math.random() * pool.length)]);
+}
+
+els.pet.addEventListener('click', petClicked);
+
+// 双击宠物 → 打开聊天输入
+els.pet.addEventListener('dblclick', () => {
+  wake();
+  els.chatRow.classList.toggle('show');
+  if (els.chatRow.classList.contains('show')) els.chatInput.focus();
+});
+
+els.chatInput.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  const text = els.chatInput.value.trim();
+  if (!text) return;
+  els.chatInput.value = '';
+  wake();
+  say('……', 60000);            // 思考中
+  setState('happy');
+  const res = await window.api.aiChat(text);
+  say(res.text);
+  setTimeout(() => { if (state === 'happy') setState('idle'); }, 1600);
+});
+
+// ---- 互动按钮（来自 config.buttons） ----
+function renderToolbar() {
+  els.toolbar.innerHTML = '';
+  (config?.buttons || []).forEach(label => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = (ev) => { ev.stopPropagation(); petClicked(); };
+    els.toolbar.appendChild(b);
+  });
+  // 固定一个「后台」入口
+  const gear = document.createElement('button');
+  gear.textContent = '⚙';
+  gear.title = '后台管理';
+  gear.onclick = (ev) => { ev.stopPropagation(); window.api.openPanel(); };
+  els.toolbar.appendChild(gear);
+}
+
+// ---- 番茄钟 / 久坐提醒 ----
+let pomoTimer = null, sitTimer = null;
+function setupPomodoro() {
+  clearInterval(pomoTimer); clearInterval(sitTimer);
+  const p = config?.pomodoro;
+  if (!p || !p.enabled) return;
+  pomoTimer = setInterval(() => {
+    wake(); setState('happy');
+    say(p.workEndMessage || '休息一下吧！', 6000);
+    setTimeout(() => { if (state === 'happy') setState('idle'); }, 2000);
+  }, Math.max(1, p.workMinutes) * 60000);
+  sitTimer = setInterval(() => {
+    wake(); setState('happy');
+    say(p.sitMessage || '起来走两步~', 6000);
+  }, Math.max(1, p.sitReminderMinutes) * 60000);
+}
+
+// ---- 初始化 ----
+async function init() {
+  config = await window.api.getConfig();
+  sizeCanvas();
+  loadAsset();
+  renderToolbar();
+  setupPomodoro();
+  setState('idle');
+  requestAnimationFrame(tick);
+  // 开场打个招呼
+  setTimeout(() => say(`嗨，我是${config?.petName || '豆豆'}，今天也一起加油~`), 800);
+}
+
+window.api.onConfigUpdated((cfg) => {
+  config = cfg;
+  sizeCanvas();
+  loadAsset();
+  renderToolbar();
+  setupPomodoro();
+});
+
+init();
+</script>
+</body>
+</html>

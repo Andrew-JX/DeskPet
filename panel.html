@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>DeskPet 后台</title>
+<style>
+  :root {
+    --bg: #15161c;
+    --card: #1f2129;
+    --line: #2c2f3a;
+    --fg: #e8e9ee;
+    --muted: #9298a8;
+    --accent: #ffb74d;
+    --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px;
+    background: var(--bg); color: var(--fg);
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 13px;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .card h2 { font-size: 13px; margin: 0 0 10px; color: var(--accent); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  input[type="text"], input[type="number"], textarea, select {
+    width: 100%;
+    background: #14151b;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--fg);
+    padding: 7px 9px;
+    font-size: 12px;
+    font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 56px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button {
+    border: none; border-radius: 8px;
+    padding: 7px 12px; font-size: 12px;
+    cursor: pointer; font-family: inherit;
+    background: #2c2f3a; color: var(--fg);
+  }
+  button.primary { background: var(--accent); color: #1a1a1a; font-weight: 600; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .asset {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px; border: 1px solid var(--line);
+    border-radius: 8px; margin-bottom: 8px;
+  }
+  .asset.active { border-color: var(--accent); }
+  .asset .name { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .asset .badge { font-size: 10px; color: var(--muted); }
+  .switch { display: flex; align-items: center; gap: 8px; }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+  .save-bar {
+    position: sticky; bottom: 0;
+    background: var(--bg); padding: 10px 0 0;
+    display: flex; gap: 8px;
+  }
+  .grid3 { display: flex; gap: 8px; }
+  .grid3 > div { flex: 1; }
+</style>
+</head>
+<body>
+  <h1>🐾 DeskPet 后台管理</h1>
+  <div class="sub">管理宠物素材、人设与提醒 —— 保存后实时生效到桌面</div>
+
+  <!-- 素材 -->
+  <div class="card">
+    <h2>宠物素材</h2>
+    <div id="assetList"></div>
+    <button class="primary" id="uploadBtn">+ 上传素材（精灵图 / 图片 / 视频）</button>
+    <div class="hint">
+      支持绿底精灵图，上传后自动抠绿幕并按网格切帧。<br>
+      默认按 <b>5 列 × 4 行 = 20 帧</b> 解析；若你的图行列不同，在下方调整。
+    </div>
+
+    <div id="gridEditor" style="display:none; margin-top:12px;">
+      <label>当前素材网格 & 状态映射</label>
+      <div class="grid3">
+        <div><label>列 cols</label><input type="number" id="cols" min="1"></div>
+        <div><label>行 rows</label><input type="number" id="rows" min="1"></div>
+        <div><label>总帧 frames</label><input type="number" id="frameCount" min="1"></div>
+      </div>
+      <div class="grid3" style="margin-top:6px;">
+        <div><label>idle 区间</label><input type="text" id="s_idle" placeholder="0,4"></div>
+        <div><label>walk 区间</label><input type="text" id="s_walk" placeholder="5,9"></div>
+      </div>
+      <div class="grid3" style="margin-top:6px;">
+        <div><label>happy 区间</label><input type="text" id="s_happy" placeholder="10,14"></div>
+        <div><label>sleep 区间</label><input type="text" id="s_sleep" placeholder="15,19"></div>
+      </div>
+      <button class="ghost" id="saveGrid" style="margin-top:8px;">应用网格设置</button>
+    </div>
+  </div>
+
+  <!-- 基本设置 -->
+  <div class="card">
+    <h2>基本设置</h2>
+    <label>宠物名字</label>
+    <input type="text" id="petName">
+    <label>大小：<span id="sizeVal"></span> px</label>
+    <input type="range" id="petSize" min="100" max="320" step="10" style="width:100%">
+    <label class="switch" style="margin-top:12px;">
+      <input type="checkbox" id="memorialMode" style="width:auto">
+      <span>纪念模式（为已离开的毛孩子 · 语气更轻柔克制）</span>
+    </label>
+    <div class="hint">纪念模式下，宠物是「带着它形象的陪伴者」，不会假装复活或冒充本体。</div>
+  </div>
+
+  <!-- 人设 -->
+  <div class="card">
+    <h2>AI 人设</h2>
+    <label>性格设定（注入对话）</label>
+    <textarea id="persona"></textarea>
+    <label>随机回应（每行一句，点击/无AI时用）</label>
+    <textarea id="responses"></textarea>
+    <label>闲置碎碎念（每行一句）</label>
+    <textarea id="idleMessages"></textarea>
+    <label>互动按钮（每行一个）</label>
+    <textarea id="buttons"></textarea>
+    <div class="hint">已配置 ANTHROPIC_API_KEY 环境变量时走真实大模型；否则自动退回随机回应，演示不会空。</div>
+  </div>
+
+  <!-- 提醒 -->
+  <div class="card">
+    <h2>番茄钟 / 久坐提醒</h2>
+    <label class="switch">
+      <input type="checkbox" id="pomoEnabled" style="width:auto"><span>开启提醒</span>
+    </label>
+    <div class="row" style="margin-top:8px;">
+      <div><label>专注时长（分钟）</label><input type="number" id="workMinutes" min="1"></div>
+      <div><label>久坐提醒（分钟）</label><input type="number" id="sitMinutes" min="1"></div>
+    </div>
+    <label>番茄钟结束语</label>
+    <input type="text" id="workEndMessage">
+    <label>久坐提醒语</label>
+    <input type="text" id="sitMessage">
+  </div>
+
+  <div class="save-bar">
+    <button class="primary" id="saveBtn" style="flex:2">保存并应用</button>
+    <button class="ghost" id="reloadBtn">重新读取</button>
+  </div>
+
+<script>
+let config = null;
+
+const $ = (id) => document.getElementById(id);
+
+function renderAssets() {
+  const list = $('assetList');
+  list.innerHTML = '';
+  if (!config.assets.length) {
+    list.innerHTML = '<div class="hint">还没有素材，上传一张你家宠物的绿底精灵图试试～</div>';
+    $('gridEditor').style.display = 'none';
+    return;
+  }
+  config.assets.forEach(a => {
+    const div = document.createElement('div');
+    div.className = 'asset' + (a.id === config.currentAssetId ? ' active' : '');
+    div.innerHTML = `
+      <span class="name">${a.name}</span>
+      <span class="badge">${a.type}</span>`;
+    const useBtn = document.createElement('button');
+    useBtn.textContent = a.id === config.currentAssetId ? '使用中' : '使用';
+    useBtn.className = a.id === config.currentAssetId ? 'primary' : 'ghost';
+    useBtn.onclick = async () => { config = await window.api.setCurrentAsset(a.id); renderAll(); };
+    const del = document.createElement('button');
+    del.textContent = '删除'; del.className = 'danger';
+    del.onclick = async () => { config = await window.api.deleteAsset(a.id); renderAll(); };
+    div.appendChild(useBtn); div.appendChild(del);
+    list.appendChild(div);
+  });
+  renderGridEditor();
+}
+
+function renderGridEditor() {
+  const a = config.assets.find(x => x.id === config.currentAssetId);
+  if (!a) { $('gridEditor').style.display = 'none'; return; }
+  $('gridEditor').style.display = 'block';
+  $('cols').value = a.cols || 5;
+  $('rows').value = a.rows || 4;
+  $('frameCount').value = a.frameCount || 20;
+  const m = a.stateMap || {};
+  $('s_idle').value = (m.idle || [0,4]).join(',');
+  $('s_walk').value = (m.walk || [5,9]).join(',');
+  $('s_happy').value = (m.happy || [10,14]).join(',');
+  $('s_sleep').value = (m.sleep || [15,19]).join(',');
+}
+
+function parseRange(v, fb) {
+  const p = v.split(',').map(s => parseInt(s.trim(), 10));
+  return (p.length === 2 && !p.some(isNaN)) ? p : fb;
+}
+
+$('saveGrid').onclick = async () => {
+  const a = config.assets.find(x => x.id === config.currentAssetId);
+  if (!a) return;
+  const updated = Object.assign({}, a, {
+    cols: +$('cols').value, rows: +$('rows').value, frameCount: +$('frameCount').value,
+    stateMap: {
+      idle: parseRange($('s_idle').value, [0,4]),
+      walk: parseRange($('s_walk').value, [5,9]),
+      happy: parseRange($('s_happy').value, [10,14]),
+      sleep: parseRange($('s_sleep').value, [15,19])
+    }
+  });
+  config = await window.api.updateAsset(updated);
+  renderAll();
+};
+
+function renderForm() {
+  $('petName').value = config.petName || '';
+  $('petSize').value = config.petSize || 180;
+  $('sizeVal').textContent = config.petSize || 180;
+  $('memorialMode').checked = !!config.memorialMode;
+  $('persona').value = config.persona || '';
+  $('responses').value = (config.responses || []).join('\n');
+  $('idleMessages').value = (config.idleMessages || []).join('\n');
+  $('buttons').value = (config.buttons || []).join('\n');
+  const p = config.pomodoro || {};
+  $('pomoEnabled').checked = !!p.enabled;
+  $('workMinutes').value = p.workMinutes || 25;
+  $('sitMinutes').value = p.sitReminderMinutes || 45;
+  $('workEndMessage').value = p.workEndMessage || '';
+  $('sitMessage').value = p.sitMessage || '';
+}
+
+$('petSize').oninput = () => $('sizeVal').textContent = $('petSize').value;
+
+function renderAll() { renderAssets(); renderForm(); }
+
+const lines = (v) => v.split('\n').map(s => s.trim()).filter(Boolean);
+
+$('saveBtn').onclick = async () => {
+  await window.api.setPetSize(+$('petSize').value);
+  config = await window.api.saveConfig({
+    petName: $('petName').value,
+    memorialMode: $('memorialMode').checked,
+    persona: $('persona').value,
+    responses: lines($('responses').value),
+    idleMessages: lines($('idleMessages').value),
+    buttons: lines($('buttons').value),
+    pomodoro: {
+      enabled: $('pomoEnabled').checked,
+      workMinutes: +$('workMinutes').value,
+      sitReminderMinutes: +$('sitMinutes').value,
+      workEndMessage: $('workEndMessage').value,
+      sitMessage: $('sitMessage').value
+    }
+  });
+  $('saveBtn').textContent = '✓ 已保存';
+  setTimeout(() => $('saveBtn').textContent = '保存并应用', 1200);
+};
+
+$('uploadBtn').onclick = async () => {
+  const a = await window.api.uploadAsset();
+  if (a) { config = await window.api.getConfig(); renderAll(); }
+};
+
+$('reloadBtn').onclick = async () => { config = await window.api.getConfig(); renderAll(); };
+
+window.api.onConfigUpdated((cfg) => { config = cfg; renderAll(); });
+
+(async () => { config = await window.api.getConfig(); renderAll(); })();
+</script>
+</body>
+</html>
