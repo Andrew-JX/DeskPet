@@ -120,8 +120,6 @@
   <!-- 基本设置 -->
   <div class="card">
     <h2>基本设置</h2>
-    <label>宠物名字</label>
-    <input type="text" id="petName">
     <label>大小：<span id="sizeVal"></span> px</label>
     <input type="range" id="petSize" min="100" max="320" step="10" style="width:100%">
     <label class="switch" style="margin-top:12px;">
@@ -186,8 +184,9 @@ const $ = (id) => document.getElementById(id);
 function mediaLabel(m) {
   if (!m || !m.file) return '（未设置素材）';
   if (m.type === 'video') return '🎬 视频';
+  if (m.frameIndex !== undefined) return `🖼 帧 #${m.frameIndex}`;
   if (m.frames && m.frames.length > 1) return '🖼 动图';
-  if ((m.cols || 1) * (m.rows || 1) > 1) return `🖼 精灵帧 #${(m.frames || [0])[0]}`;
+  if ((m.cols || 1) * (m.rows || 1) > 1) return `🖼 精灵图 ${m.cols}×${m.rows}`;
   return '🖼 图片';
 }
 function sameMaterial(a, b) {
@@ -254,9 +253,9 @@ function renderLibrary() {
     del.onclick = async () => { config = await window.api.deleteLibraryMedia(m.id); renderAll(); };
     top.append(name, badge, del); box.appendChild(top);
 
-    // 仅“整张图片库项”可设网格切帧（已切出的单帧不再切）
-    const isWholeImage = m.type === 'image' && !(m.frames && m.frames.length === 1 && (m.cols * m.rows) > 1);
-    if (isWholeImage) {
+    // 精灵图“源”（未被切出的整图）可设网格 + 切帧；已切出的单帧不再切
+    const isSource = m.type === 'image' && m.frameIndex === undefined;
+    if (isSource) {
       const ctl = document.createElement('div'); ctl.style.cssText = 'display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap;';
       const mk = (lbl, val) => { const l = document.createElement('label'); l.style.cssText = 'font-size:11px;color:var(--muted);margin:0;display:flex;gap:3px;align-items:center;'; const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.value = val; inp.style.width = '46px'; l.append(lbl, inp); ctl.appendChild(l); return inp; };
       const cIn = mk('列', m.cols || 1), rIn = mk('行', m.rows || 1);
@@ -341,7 +340,6 @@ $('petNameInput').addEventListener('change', async () => { config = await window
 $('addInterBtn').onclick = async () => { config = await window.api.addInteraction(config.currentAssetId, '新互动'); renderAll(); };
 
 function renderForm() {
-  $('petName').value = config.petName || '';
   $('petSize').value = config.petSize || 180;
   $('sizeVal').textContent = config.petSize || 180;
   $('memorialMode').checked = !!config.memorialMode;
@@ -394,7 +392,6 @@ const lines = (v) => v.split('\n').map(s => s.trim()).filter(Boolean);
 $('saveBtn').onclick = async () => {
   await window.api.setPetSize(+$('petSize').value);
   config = await window.api.saveConfig({
-    petName: $('petName').value,
     memorialMode: $('memorialMode').checked,
     persona: $('persona').value,
     responses: lines($('responses').value),

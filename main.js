@@ -548,7 +548,8 @@ ipcMain.handle('slice-library-frame', (_e, libId, index) => {
       id: 'lib_' + Date.now() + '_' + index,
       name: `${m.name} #${index}`,
       type: 'image', file: m.file,
-      cols: m.cols, rows: m.rows, frames: [index], fps: 0
+      cols: m.cols, rows: m.rows, frames: [index], fps: 0,
+      frameIndex: index // 标记：这是从精灵图切出的单帧（与“精灵图源”区分）
     }));
     saveConfig(config);
     broadcastConfig();
