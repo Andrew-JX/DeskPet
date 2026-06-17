@@ -107,8 +107,12 @@ function normalizeConfig(cfg) {
       }
     }
   });
+  const labelToAction = (label) =>
+    /聊|chat|说话/i.test(label) ? 'chat'
+    : /休息|睡|rest|sleep/i.test(label) ? 'rest'
+    : 'pet';
   cfg.buttons = (cfg.buttons || []).map((b) =>
-    typeof b === 'string' ? { label: b, action: 'pet' } : b
+    typeof b === 'string' ? { label: b, action: labelToAction(b) } : b
   );
   return cfg;
 }
