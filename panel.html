@@ -149,6 +149,20 @@
     <input type="text" id="sitMessage">
   </div>
 
+  <!-- 信任与数据 -->
+  <div class="card">
+    <h2>信任与数据（确定性，非 AI 生成）</h2>
+    <div id="statsRow" style="display:flex; gap:8px; text-align:center; margin-bottom:10px;"></div>
+
+    <label>待办</label>
+    <div id="todoList"></div>
+
+    <label style="margin-top:10px;">工具调用审计 trace（最近）</label>
+    <div id="traceList" style="max-height:160px; overflow:auto; font-size:11px; line-height:1.6;"></div>
+    <button class="ghost" id="clearTraceBtn" style="margin-top:8px;">清空 trace</button>
+    <div class="hint">每次 AI 想动你的数据都会先经规则路由、写操作需确认、并记进这条日志 —— 桌宠不会偷偷乱来。</div>
+  </div>
+
   <div class="save-bar">
     <button class="primary" id="saveBtn" style="flex:2">保存并应用</button>
     <button class="ghost" id="reloadBtn">重新读取</button>
@@ -240,7 +254,36 @@ function renderForm() {
 
 $('petSize').oninput = () => $('sizeVal').textContent = $('petSize').value;
 
-function renderAll() { renderAssets(); renderForm(); }
+const STATUS_ZH = {
+  proposed: '待确认', executed: '已执行', denied: '已拒绝',
+  failed: '失败', replied: '回复', expired: '过期'
+};
+function renderTrust() {
+  const s = config.stats || { focusMinutes: 0, pomodorosDone: 0, interactions: 0 };
+  const card = (n, l) => `<div style="flex:1;background:#14151b;border:1px solid var(--line);border-radius:8px;padding:8px"><div style="font-size:18px;color:var(--accent);font-weight:700">${n}</div><div style="font-size:11px;color:var(--muted)">${l}</div></div>`;
+  $('statsRow').innerHTML = card(s.focusMinutes, '专注(分)') + card(s.pomodorosDone, '番茄钟') + card(s.interactions, '互动次');
+
+  const todos = config.todos || [];
+  $('todoList').innerHTML = todos.length
+    ? todos.map(t => `<label class="switch" style="margin:4px 0"><input type="checkbox" style="width:auto" ${t.done ? 'checked' : ''} data-id="${t.id}"><span style="${t.done ? 'text-decoration:line-through;color:var(--muted)' : ''}">${t.text}</span></label>`).join('')
+    : '<div class="hint">还没有待办。试试对桌宠说「记一下：买牛奶」。</div>';
+  $('todoList').querySelectorAll('input[data-id]').forEach(cb => {
+    cb.onchange = async () => { config = await window.api.toggleTodo(cb.dataset.id); renderTrust(); };
+  });
+
+  const trace = config.trace || [];
+  $('traceList').innerHTML = trace.length
+    ? trace.slice(0, 20).map(e => {
+        const time = new Date(e.ts).toLocaleTimeString('zh-CN', { hour12: false });
+        const arg = e.args && e.args.text ? ` "${e.args.text}"` : '';
+        return `<div><span style="color:var(--muted)">${time}</span> <b>${e.tool}</b>${arg} <span style="color:var(--accent)">[${STATUS_ZH[e.status] || e.status}]</span> <span style="color:var(--muted)">·${e.source}</span></div>`;
+      }).join('')
+    : '<div class="hint">还没有调用记录。</div>';
+}
+
+$('clearTraceBtn').onclick = async () => { config = await window.api.clearTrace(); renderTrust(); };
+
+function renderAll() { renderAssets(); renderForm(); renderTrust(); }
 
 const lines = (v) => v.split('\n').map(s => s.trim()).filter(Boolean);
 

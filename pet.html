@@ -119,6 +119,23 @@
     outline: none;
     box-shadow: 0 2px 6px rgba(0,0,0,0.15);
   }
+
+  /* 写操作确认条 */
+  #confirmRow {
+    -webkit-app-region: no-drag;
+    display: none;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  #confirmRow.show { display: flex; }
+  #confirmRow button {
+    -webkit-app-region: no-drag;
+    border: none; border-radius: 12px;
+    padding: 5px 14px; font-size: 12px; cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  }
+  #confirmYes { background: var(--accent); color: #fff; }
+  #confirmNo { background: rgba(255,255,255,0.9); color: #555; }
 </style>
 </head>
 <body>
@@ -131,6 +148,10 @@
     <div id="toolbar"></div>
     <div id="chatRow">
       <input id="chatInput" type="text" placeholder="和我说点什么…" />
+    </div>
+    <div id="confirmRow">
+      <button id="confirmYes">确认</button>
+      <button id="confirmNo">取消</button>
     </div>
   </div>
 
@@ -155,8 +176,12 @@ const els = {
   placeholder: document.getElementById('placeholder'),
   toolbar: document.getElementById('toolbar'),
   chatRow: document.getElementById('chatRow'),
-  chatInput: document.getElementById('chatInput')
+  chatInput: document.getElementById('chatInput'),
+  confirmRow: document.getElementById('confirmRow'),
+  confirmYes: document.getElementById('confirmYes'),
+  confirmNo: document.getElementById('confirmNo')
 };
+let pendingProposalId = null;
 const ctx = els.canvas.getContext('2d');
 
 // ---- 气泡 ----
@@ -302,6 +327,7 @@ async function petClicked() {
   // 点击时随机说一句（本地兜底，零延迟）
   const pool = config?.responses || ['汪~'];
   say(pool[Math.floor(Math.random() * pool.length)]);
+  window.api.statEvent('interaction');
 }
 
 els.pet.addEventListener('click', petClicked);
@@ -313,17 +339,38 @@ els.pet.addEventListener('dblclick', () => {
   if (els.chatRow.classList.contains('show')) els.chatInput.focus();
 });
 
+function hideConfirm() { els.confirmRow.classList.remove('show'); pendingProposalId = null; }
+
 els.chatInput.addEventListener('keydown', async (e) => {
   if (e.key !== 'Enter') return;
   const text = els.chatInput.value.trim();
   if (!text) return;
   els.chatInput.value = '';
   wake();
+  hideConfirm();
   say('……', 60000);            // 思考中
   setState('happy');
   const res = await window.api.aiChat(text);
-  say(res.text);
+  say(res.text, 8000);
+  // 写操作：弹出确认按钮，等用户拍板
+  if (res.proposal) {
+    pendingProposalId = res.proposal.id;
+    els.confirmRow.classList.add('show');
+  }
   setTimeout(() => { if (state === 'happy') setState('idle'); }, 1600);
+});
+
+els.confirmYes.addEventListener('click', async () => {
+  if (!pendingProposalId) return;
+  const id = pendingProposalId; hideConfirm();
+  const res = await window.api.confirmTool(id, true);
+  say(res.text, 5000);
+});
+els.confirmNo.addEventListener('click', async () => {
+  if (!pendingProposalId) return;
+  const id = pendingProposalId; hideConfirm();
+  const res = await window.api.confirmTool(id, false);
+  say(res.text, 3000);
 });
 
 // ---- 互动按钮（来自 config.buttons） ----
@@ -351,6 +398,7 @@ function setupPomodoro() {
   if (!p || !p.enabled) return;
   pomoTimer = setInterval(() => {
     wake(); setState('happy');
+    window.api.statEvent('pomodoro');
     say(p.workEndMessage || '休息一下吧！', 6000);
     setTimeout(() => { if (state === 'happy') setState('idle'); }, 2000);
   }, Math.max(1, p.workMinutes) * 60000);

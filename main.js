@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain, dialog, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { routeIntent } = require('./intent');
 
 // ---------------------------------------------------------------------------
 // 路径与本地存储
@@ -58,24 +59,43 @@ function defaultConfig() {
     ai: {
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001'
-    }
+    },
+    // —— 确定性数据（由主进程计算，不交给 AI）——
+    stats: { date: '', focusMinutes: 0, pomodorosDone: 0, interactions: 0 },
+    todos: [], // { id, text, done, createdAt }
+    // 工具调用审计日志（可信内核的「可追溯」）
+    trace: [] // { ts, tool, args, status, source }
   };
+}
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// 跨天则重置当日统计（专注时长/番茄钟/互动按天计）
+function rolloverDaily(cfg) {
+  const today = todayStr();
+  if (!cfg.stats || cfg.stats.date !== today) {
+    cfg.stats = { date: today, focusMinutes: 0, pomodorosDone: 0, interactions: 0 };
+  }
+  return cfg;
 }
 
 function loadConfig() {
   ensureDirs();
   if (!fs.existsSync(CONFIG_PATH)) {
-    const cfg = defaultConfig();
+    const cfg = rolloverDaily(defaultConfig());
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
     return cfg;
   }
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
     // 合并默认值，保证新增字段不丢
-    return Object.assign(defaultConfig(), JSON.parse(raw));
+    return rolloverDaily(Object.assign(defaultConfig(), JSON.parse(raw)));
   } catch (e) {
     console.error('config 解析失败，使用默认配置:', e);
-    return defaultConfig();
+    return rolloverDaily(defaultConfig());
   }
 }
 
@@ -97,6 +117,114 @@ function publicConfig() {
     url: a.file ? pathToFileURL(path.join(USER_MEDIA_DIR, a.file)).href : null
   }));
   return clone;
+}
+
+// ===========================================================================
+// 可信工具调用内核
+// 设计原则（沿用 FitMind 方法论）：
+//   1. 意图由「规则路由」决定，不依赖模型不乱来 —— 工具不会被幻觉触发；
+//   2. 模型只负责把结果包装成自然语言（有 Key 时），无 Key 用模板兜底；
+//   3. 读操作直接执行；写操作必须用户确认后才执行；
+//   4. 每一步写进 trace 审计日志，可追溯。
+// ===========================================================================
+
+const MAX_TRACE = 50;
+let convoHistory = []; // 最近若干轮对话，给模型上下文用
+
+function logTrace(entry) {
+  config.trace = config.trace || [];
+  config.trace.unshift(Object.assign({ ts: Date.now() }, entry));
+  if (config.trace.length > MAX_TRACE) config.trace.length = MAX_TRACE;
+  saveConfig(config);
+  broadcastConfig();
+}
+
+// 工具白名单。risk: 'read' 可直接执行；'write' 需确认。
+const TOOLS = {
+  get_stats: {
+    risk: 'read',
+    desc: '查看今天的专注时长、番茄钟数、互动次数',
+    run: () => ({
+      focusMinutes: config.stats.focusMinutes,
+      pomodorosDone: config.stats.pomodorosDone,
+      interactions: config.stats.interactions
+    })
+  },
+  list_todos: {
+    risk: 'read',
+    desc: '列出还没完成的待办',
+    run: () => (config.todos || []).filter((t) => !t.done).map((t) => t.text)
+  },
+  add_todo: {
+    risk: 'write',
+    desc: '新增一条待办',
+    run: (args) => {
+      const text = (args && args.text || '').trim();
+      if (!text) return { ok: false, reason: '没有内容' };
+      const todo = { id: 't_' + Date.now(), text, done: false, createdAt: Date.now() };
+      config.todos = config.todos || [];
+      config.todos.push(todo);
+      return { ok: true, text };
+    }
+  },
+  complete_todo: {
+    risk: 'write',
+    desc: '把某条待办标记为完成',
+    run: (args) => {
+      const kw = (args && args.text || '').trim();
+      const todo = (config.todos || []).find((t) => !t.done && t.text.includes(kw));
+      if (!todo) return { ok: false, reason: '没找到匹配的待办' };
+      todo.done = true;
+      return { ok: true, text: todo.text };
+    }
+  }
+};
+
+// 把工具结果转成自然语言（无 Key 时的模板兜底）
+function templateForResult(tool, result, args) {
+  switch (tool) {
+    case 'get_stats':
+      return `今天你已经专注了约 ${result.focusMinutes} 分钟，完成了 ${result.pomodorosDone} 个番茄钟，我们互动了 ${result.interactions} 次~`;
+    case 'list_todos':
+      return result.length ? `还有这些待办没完成：\n· ${result.join('\n· ')}` : '太棒了，待办都清空啦！';
+    case 'add_todo':
+      return result.ok ? `好的，记下啦：「${result.text}」` : `没记成：${result.reason}`;
+    case 'complete_todo':
+      return result.ok ? `「${result.text}」完成，给你点个赞！` : `没找到：${result.reason}`;
+    default:
+      return '汪~';
+  }
+}
+
+let pendingProposals = {}; // id -> { tool, args }
+
+// 用模型把"工具结果/闲聊"包装成符合人设的一句话；失败/无 Key 返回 null
+async function modelWrap(userText, contextNote) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return null;
+  let system = config.persona || '你是一只陪伴用户的桌面宠物，简短温暖。';
+  if (config.memorialMode) {
+    system += '\n\n【纪念模式】你是带着已离开宠物形象的温柔陪伴者，不冒充本体、不消费悲伤。';
+  }
+  if (contextNote) system += `\n\n【可用事实，只能基于它回答，不要编造】${contextNote}`;
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: (config.ai && config.ai.model) || 'claude-haiku-4-5-20251001',
+        max_tokens: 150,
+        system,
+        messages: [...convoHistory.slice(-6), { role: 'user', content: userText }]
+      })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return (data.content && data.content[0] && data.content[0].text) || null;
+  } catch (e) {
+    console.error('modelWrap 异常:', e);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,58 +443,84 @@ ipcMain.handle('move-pet', (_e, dx, dy) => {
 });
 
 // ---------------------------------------------------------------------------
-// IPC：AI 对话
-// 关键安全设计：API Key 只存在主进程环境变量，永不进入渲染层 / config.json。
-// 没有 Key 时退回本地兜底文案，演示不翻车。
+// IPC：AI 对话（意图路由 → 工具调用 → 模型/模板包装）
+// 安全设计：API Key 只在主进程；写操作必须用户确认；每步进 trace。
 // ---------------------------------------------------------------------------
 ipcMain.handle('ai-chat', async (_e, userText) => {
-  const key = process.env.ANTHROPIC_API_KEY;
+  const route = routeIntent(userText);
+  convoHistory.push({ role: 'user', content: userText });
 
-  // 构造人设
-  let system = config.persona || '你是一只陪伴用户的桌面宠物，简短温暖。';
-  if (config.memorialMode) {
-    system +=
-      '\n\n【纪念模式】主人养的这只宠物已经离开了。你是带着它形象的温柔陪伴者，' +
-      '不要假装自己就是那只宠物本体、不说「我回来了」之类的话，不消费悲伤；' +
-      '当主人流露思念时，给予安静的、有分寸的安慰。';
-  }
-
-  // 无 Key：本地兜底，从 responses 里挑，保证有反应
-  if (!key) {
-    const pool = config.responses && config.responses.length ? config.responses : ['汪~'];
-    const pick = pool[Math.floor(Math.random() * pool.length)];
-    return { text: pick, source: 'local-fallback' };
-  }
-
-  // 有 Key：调用 Anthropic Messages API（主进程内，密钥不外泄）
-  try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: (config.ai && config.ai.model) || 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
-        system,
-        messages: [{ role: 'user', content: userText }]
-      })
-    });
-    if (!resp.ok) {
-      const errText = await resp.text();
-      console.error('AI API 错误:', resp.status, errText);
-      return { text: '（我有点走神了…再说一遍？）', source: 'api-error' };
+  // 闲聊：不触发任何工具
+  if (!route.tool) {
+    let text = await modelWrap(userText, null);
+    if (!text) {
+      const pool = config.responses && config.responses.length ? config.responses : ['汪~'];
+      text = pool[Math.floor(Math.random() * pool.length)];
     }
-    const data = await resp.json();
-    const text =
-      (data.content && data.content[0] && data.content[0].text) || '汪~';
-    return { text, source: 'api' };
-  } catch (e) {
-    console.error('AI 调用异常:', e);
-    return { text: '（网络好像不太好…）', source: 'exception' };
+    convoHistory.push({ role: 'assistant', content: text });
+    logTrace({ tool: 'chat', args: {}, status: 'replied', source: process.env.ANTHROPIC_API_KEY ? 'model' : 'fallback' });
+    return { text, source: 'chat' };
   }
+
+  const tool = TOOLS[route.tool];
+
+  // 写操作：不执行，返回待确认提案
+  if (tool.risk === 'write') {
+    const id = 'p_' + Date.now();
+    pendingProposals[id] = { tool: route.tool, args: route.args };
+    logTrace({ tool: route.tool, args: route.args, status: 'proposed', source: 'router' });
+    const preview =
+      route.tool === 'add_todo' ? `要我帮你记下「${route.args.text}」吗？`
+      : route.tool === 'complete_todo' ? `把「${route.args.text}」标记为完成？`
+      : `要执行 ${tool.desc} 吗？`;
+    return { text: preview, proposal: { id, tool: route.tool, desc: tool.desc }, source: 'proposal' };
+  }
+
+  // 读操作：直接执行，结果作为唯一事实交给模型包装（无 Key 用模板）
+  const result = tool.run(route.args);
+  logTrace({ tool: route.tool, args: route.args, status: 'executed', source: 'router' });
+  const factNote = `${tool.desc} 的结果：${JSON.stringify(result)}`;
+  let text = await modelWrap(userText, factNote);
+  if (!text) text = templateForResult(route.tool, result, route.args);
+  convoHistory.push({ role: 'assistant', content: text });
+  return { text, source: 'tool-read' };
+});
+
+// 确认 / 取消一个写操作提案
+ipcMain.handle('confirm-tool', async (_e, id, ok) => {
+  const p = pendingProposals[id];
+  if (!p) return { text: '（这个操作已经过期啦）', source: 'expired' };
+  delete pendingProposals[id];
+  if (!ok) {
+    logTrace({ tool: p.tool, args: p.args, status: 'denied', source: 'user' });
+    return { text: '好的，那就不记啦~', source: 'denied' };
+  }
+  const result = TOOLS[p.tool].run(p.args);
+  logTrace({ tool: p.tool, args: p.args, status: result && result.ok === false ? 'failed' : 'executed', source: 'user' });
+  return { text: templateForResult(p.tool, result, p.args), source: 'tool-write' };
+});
+
+// 统计事件：互动 / 番茄钟完成
+ipcMain.handle('stat-event', (_e, kind) => {
+  rolloverDaily(config);
+  if (kind === 'interaction') config.stats.interactions++;
+  else if (kind === 'pomodoro') config.stats.pomodorosDone++;
+  saveConfig(config);
+  broadcastConfig();
+  return config.stats;
+});
+
+// 待办勾选 / 清空 trace（后台面板用）
+ipcMain.handle('toggle-todo', (_e, id) => {
+  const t = (config.todos || []).find((x) => x.id === id);
+  if (t) { t.done = !t.done; saveConfig(config); broadcastConfig(); }
+  return publicConfig();
+});
+ipcMain.handle('clear-trace', () => {
+  config.trace = [];
+  saveConfig(config);
+  broadcastConfig();
+  return publicConfig();
 });
 
 // ---------------------------------------------------------------------------
@@ -376,6 +530,14 @@ app.whenReady().then(() => {
   initPaths();
   config = loadConfig();
   createPetWindow();
+
+  // 陪伴时长：应用运行期间每分钟 +1（确定性，不由 AI 估算）
+  setInterval(() => {
+    rolloverDaily(config);
+    config.stats.focusMinutes++;
+    saveConfig(config);
+    broadcastConfig();
+  }, 60000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createPetWindow();

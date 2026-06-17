@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('api', {
 
   movePet: (dx, dy) => ipcRenderer.invoke('move-pet', dx, dy),
   aiChat: (text) => ipcRenderer.invoke('ai-chat', text),
+  confirmTool: (id, ok) => ipcRenderer.invoke('confirm-tool', id, ok),
+  statEvent: (kind) => ipcRenderer.invoke('stat-event', kind),
+  toggleTodo: (id) => ipcRenderer.invoke('toggle-todo', id),
+  clearTrace: () => ipcRenderer.invoke('clear-trace'),
   readAssetData: (id) => ipcRenderer.invoke('read-asset-data', id),
 
   // 配置变更广播
