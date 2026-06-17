@@ -160,17 +160,17 @@
 
 <script>
 let config = null;
-let currentAsset = null;
-let processedCanvas = null;   // 抠图后的整张精灵图
+let currentAsset = null;       // 当前宠物（待机素材来源）
+let processedCanvas = null;    // 抠图后的整张图（图片素材）
+let matCols = 1, matRows = 1, matFrames = [0], matFps = 0; // 当前播放素材的帧参数
 let frameW = 0, frameH = 0;
-
-let state = 'idle';
 let frameIndex = 0;
 let lastFrameTime = 0;
-const FPS = 6;
 
 let lastInteraction = Date.now();
 let bubbleTimer = null;
+let playingInterId = null;     // 正在播放的互动 id；null = 待机
+let returnTimer = null;
 
 const els = {
   bubble: document.getElementById('bubble'),
@@ -222,38 +222,51 @@ function stopVideo() {
   isVideo = false;
 }
 
-async function loadAsset() {
-  currentAsset = null;
-  processedCanvas = null;
+function loadCurrentPet() {
+  currentAsset = ((config && config.assets) || []).find(a => a.id === config.currentAssetId) || null;
+  playingInterId = null;
+  clearTimeout(returnTimer);
+  if (!currentAsset || !currentAsset.file) { showPlaceholder(); return; }
+  showIdle();
+}
+
+// 把当前宠物自身当作「待机」素材
+function idleMaterial() {
+  if (!currentAsset) return null;
+  return { type: currentAsset.type, file: currentAsset.file, cols: currentAsset.cols, rows: currentAsset.rows, frames: currentAsset.frames, fps: currentAsset.fps };
+}
+function showIdle() { playingInterId = null; playMaterial(idleMaterial()); }
+
+// 播放一段素材：图片精灵图（抠绿幕+切帧）或视频（逐帧抠绿幕）
+async function playMaterial(mat) {
   stopVideo();
-  if (!config || !config.currentAssetId) { showPlaceholder(); return; }
-  const asset = config.assets.find(a => a.id === config.currentAssetId);
-  if (!asset) { showPlaceholder(); return; }
-  currentAsset = asset;
-
-  if (asset.type === 'video') { setupVideo(asset); return; }
-
-  // ---- 图片精灵图：抠绿幕 + 切帧 ----
-  const dataUrl = await window.api.readAssetData(asset.id);
+  processedCanvas = null;
+  if (!mat || !mat.file) { showPlaceholder(); return; }
+  if (mat.type === 'video') { setupVideo(mat.file); return; }
+  const dataUrl = await window.api.readMedia(mat.file);
   if (!dataUrl) { showPlaceholder(); return; }
   const img = new Image();
   img.onload = () => {
     processedCanvas = chromaKey(img);
-    frameW = Math.floor(processedCanvas.width / (asset.cols || 1));
-    frameH = Math.floor(processedCanvas.height / (asset.rows || 1));
+    matCols = mat.cols || 1; matRows = mat.rows || 1;
+    matFrames = (mat.frames && mat.frames.length) ? mat.frames : [0];
+    matFps = mat.fps || 0;
+    frameW = Math.floor(processedCanvas.width / matCols);
+    frameH = Math.floor(processedCanvas.height / matRows);
+    frameIndex = 0;
     sizeCanvas();
     els.placeholder.style.display = 'none';
     els.canvas.style.display = 'block';
     els.canvas.classList.add('breathing'); // 静帧才需要“呼吸”
-    drawFrame(); // 立刻画出当前动作的定格帧
+    drawFrame();
   };
   img.onerror = () => showPlaceholder();
   img.src = dataUrl;
 }
 
 // ---- 视频：逐帧实时抠绿幕播放（绿底循环视频 → 透明、丝滑、真动）----
-async function setupVideo(asset) {
-  const dataUrl = await window.api.readAssetData(asset.id);
+async function setupVideo(file) {
+  const dataUrl = await window.api.readMedia(file);
   if (!dataUrl) { showPlaceholder(); return; }
   videoEl = document.createElement('video');
   videoEl.muted = true; videoEl.loop = true; videoEl.autoplay = true; videoEl.playsInline = true;
@@ -294,95 +307,71 @@ function sizeCanvas() {
   els.canvas.height = size;
 }
 
-// ---- 动作 → 帧 ----
-// 每个动作 = { frames:[...], fps }。单帧或 fps=0 → 定格静止（不轮播，解决“一抽一抽”）。
-function currentActionDef() {
-  const acts = (currentAsset && currentAsset.actions) ? currentAsset.actions : {};
-  return acts[state] || acts.idle || { frames: [0], fps: 0 };
-}
-
+// ---- 画当前素材的帧（单帧定格 / 多帧循环）----
 function drawFrame() {
-  if (!processedCanvas || !currentAsset) return;
-  const def = currentActionDef();
-  const frames = (def.frames && def.frames.length) ? def.frames : [0];
-  const idx = frames.length > 1 ? frames[frameIndex % frames.length] : frames[0];
-  const cols = currentAsset.cols || 1;
-  const sx = (idx % cols) * frameW;
-  const sy = Math.floor(idx / cols) * frameH;
+  if (!processedCanvas) return;
+  const idx = matFrames.length > 1 ? matFrames[frameIndex % matFrames.length] : matFrames[0];
+  const sx = (idx % matCols) * frameW;
+  const sy = Math.floor(idx / matCols) * frameH;
   const size = els.canvas.width;
   ctx.clearRect(0, 0, size, size);
   ctx.drawImage(processedCanvas, sx, sy, frameW, frameH, 0, 0, size, size);
 }
 
-function setState(s) {
-  if (state !== s) { state = s; frameIndex = 0; drawFrame(); }
-}
-
 // ---- 主循环 ----
-// 视频：按 ~30fps 逐帧抠绿幕；精灵图：单帧静止，多帧按各自 fps 循环
+// 视频：~30fps 逐帧抠绿幕；图片：单帧静止，多帧按 fps 循环
 function tick(now) {
   if (isVideo) {
     if (now - lastFrameTime > 33) { lastFrameTime = now; drawVideoFrame(); }
+  } else if (processedCanvas) {
+    if (matFps > 0 && matFrames.length > 1 && now - lastFrameTime > 1000 / matFps) {
+      lastFrameTime = now; frameIndex++; drawFrame();
+    }
   } else {
-    const def = currentActionDef();
-    const animated = processedCanvas && def.fps > 0 && def.frames && def.frames.length > 1;
-    if (animated && now - lastFrameTime > 1000 / def.fps) {
-      lastFrameTime = now;
-      frameIndex++;
-      drawFrame();
-    }
-    if (!processedCanvas) {
-      els.placeholder.textContent = state === 'sleep' ? '😴' : '🐶';
-    }
-    // 闲置 → 睡觉（仅精灵图/占位模式有视觉切换）
-    if (state === 'idle' && Date.now() - lastInteraction > 30000) {
-      setState('sleep');
-      const msgs = config?.idleMessages || [];
-      if (msgs.length && Math.random() < 0.3) say(msgs[Math.floor(Math.random() * msgs.length)]);
-    }
+    els.placeholder.textContent = '🐶';
   }
   requestAnimationFrame(tick);
 }
 
-// ---- 偶尔散步（移动窗口） ----
+// ---- 偶尔散步（移动窗口），待机且近期无互动时才走 ----
 setInterval(() => {
-  if (state !== 'idle') return;
-  if (Math.random() < 0.4) {
-    setState('walk');
+  if (playingInterId) return;
+  if (Date.now() - lastInteraction < 6000) return;
+  if (Math.random() < 0.35) {
     let steps = 0;
     const dir = Math.random() < 0.5 ? -1 : 1;
     const walk = setInterval(() => {
       window.api.movePet(dir * 8, 0);
-      if (++steps > 12) {
-        clearInterval(walk);
-        setState('idle');
-      }
+      if (++steps > 10) clearInterval(walk);
     }, 90);
   }
 }, 18000);
 
 // ---- 交互 ----
-function wake() { lastInteraction = Date.now(); if (state === 'sleep') setState('idle'); }
-
-// 播放某个动作一段时间后回到 idle
-function playAction(action, ms = 1600) {
-  wake();
-  setState(action);
-  setTimeout(() => { if (state === action) setState('idle'); }, ms);
+// 触发一个互动：播它的素材，几秒后（或下次互动前）回到待机
+function playInteraction(it) {
+  lastInteraction = Date.now();
+  window.api.statEvent('interaction');
+  playingInterId = it.id;
+  if (it.file) playMaterial(it);   // 有素材就播；没传素材则保持待机
+  const pool = config?.responses || ['汪~'];
+  say(pool[Math.floor(Math.random() * pool.length)]);
+  clearTimeout(returnTimer);
+  returnTimer = setTimeout(() => { if (playingInterId === it.id) showIdle(); }, 4000);
 }
 
 async function petClicked() {
-  playAction('pet'); // 直接点身体 = 摸摸头
+  lastInteraction = Date.now();
+  window.api.statEvent('interaction');
   const pool = config?.responses || ['汪~'];
   say(pool[Math.floor(Math.random() * pool.length)]);
-  window.api.statEvent('interaction');
 }
 
 els.pet.addEventListener('click', petClicked);
 
 // 双击宠物 → 打开聊天输入
 els.pet.addEventListener('dblclick', () => {
-  wake();
+  lastInteraction = Date.now();
   els.chatRow.classList.toggle('show');
   if (els.chatRow.classList.contains('show')) els.chatInput.focus();
 });
@@ -394,10 +383,9 @@ els.chatInput.addEventListener('keydown', async (e) => {
   const text = els.chatInput.value.trim();
   if (!text) return;
   els.chatInput.value = '';
-  wake();
+  lastInteraction = Date.now();
   hideConfirm();
   say('……', 60000);            // 思考中
-  setState('chat');
   const res = await window.api.aiChat(text);
   say(res.text, 8000);
   // 写操作：弹出确认按钮，等用户拍板
@@ -405,7 +393,6 @@ els.chatInput.addEventListener('keydown', async (e) => {
     pendingProposalId = res.proposal.id;
     els.confirmRow.classList.add('show');
   }
-  setTimeout(() => { if (state === 'chat') setState('idle'); }, 1600);
 });
 
 els.confirmYes.addEventListener('click', async () => {
@@ -421,21 +408,14 @@ els.confirmNo.addEventListener('click', async () => {
   say(res.text, 3000);
 });
 
-// ---- 互动按钮（来自 config.buttons） ----
+// ---- 互动按钮（来自当前宠物的 interactions）----
 function renderToolbar() {
   els.toolbar.innerHTML = '';
-  (config?.buttons || []).forEach(btn => {
-    const label = typeof btn === 'string' ? btn : btn.label;
-    const action = typeof btn === 'string' ? 'pet' : (btn.action || 'pet');
+  const inters = (currentAsset && currentAsset.interactions) || [];
+  inters.forEach(it => {
     const b = document.createElement('button');
-    b.textContent = label;
-    b.onclick = (ev) => {
-      ev.stopPropagation();
-      playAction(action);                 // 播放该按钮绑定的动作
-      const pool = config?.responses || ['汪~'];
-      say(pool[Math.floor(Math.random() * pool.length)]);
-      window.api.statEvent('interaction');
-    };
+    b.textContent = it.label;
+    b.onclick = (ev) => { ev.stopPropagation(); playInteraction(it); };
     els.toolbar.appendChild(b);
   });
   // 固定一个「后台」入口
@@ -453,36 +433,51 @@ function setupPomodoro() {
   const p = config?.pomodoro;
   if (!p || !p.enabled) return;
   pomoTimer = setInterval(() => {
-    wake(); setState('rest');
     window.api.statEvent('pomodoro');
     say(p.workEndMessage || '休息一下吧！', 6000);
-    setTimeout(() => { if (state === 'rest') setState('idle'); }, 2000);
   }, Math.max(1, p.workMinutes) * 60000);
   sitTimer = setInterval(() => {
-    wake(); setState('rest');
     say(p.sitMessage || '起来走两步~', 6000);
   }, Math.max(1, p.sitReminderMinutes) * 60000);
 }
 
+// ---- 配置签名：只有宠物/素材/尺寸真正变化时才重载，避免统计广播导致视频不停重启 ----
+function petSignature(cfg) {
+  const a = ((cfg && cfg.assets) || []).find(x => x.id === cfg.currentAssetId);
+  return JSON.stringify({
+    size: cfg && cfg.petSize,
+    a: a ? { id: a.id, t: a.type, f: a.file, c: a.cols, r: a.rows, fr: a.frames, fp: a.fps,
+      it: (a.interactions || []).map(i => [i.id, i.label, i.type, i.file, i.cols, i.rows, i.frames, i.fps]) } : null
+  });
+}
+function pomoSignature(cfg) { return JSON.stringify((cfg && cfg.pomodoro) || {}); }
+let lastPetSig = '', lastPomoSig = '';
+
 // ---- 初始化 ----
 async function init() {
   config = await window.api.getConfig();
+  lastPetSig = petSignature(config);
+  lastPomoSig = pomoSignature(config);
   sizeCanvas();
-  loadAsset();
+  loadCurrentPet();
   renderToolbar();
   setupPomodoro();
-  setState('idle');
   requestAnimationFrame(tick);
   // 开场打个招呼
-  setTimeout(() => say(`嗨，我是${config?.petName || '豆豆'}，今天也一起加油~`), 800);
+  setTimeout(() => say(`嗨，我是${currentAsset?.name || config?.petName || '它'}，今天也一起加油~`), 800);
 }
 
 window.api.onConfigUpdated((cfg) => {
   config = cfg;
-  sizeCanvas();
-  loadAsset();
-  renderToolbar();
-  setupPomodoro();
+  const sig = petSignature(cfg);
+  if (sig !== lastPetSig) {
+    lastPetSig = sig;
+    sizeCanvas();
+    loadCurrentPet();
+    renderToolbar();
+  }
+  const psig = pomoSignature(cfg);
+  if (psig !== lastPomoSig) { lastPomoSig = psig; setupPomodoro(); }
 });
 
 init();

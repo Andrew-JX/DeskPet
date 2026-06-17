@@ -32,7 +32,9 @@ function ensureDirs() {
 function defaultConfig() {
   return {
     currentAssetId: null,
-    assets: [], // { id, name, type, path, cols, rows, frameCount, stateMap }
+    // 每个素材 = 一个宠物：{ id,name,type,file, cols,rows,frames,fps,  // 待机素材自身
+    //   interactions:[ {id,label,type,file,cols,rows,frames,fps} ] }  // 用户自定义互动，各带素材
+    assets: [],
     petSize: 180,
     petName: '豆豆',
     // 宠物人设：注入到 AI 对话的 system prompt，决定它说话的语气。
@@ -41,12 +43,6 @@ function defaultConfig() {
       '你不会假装自己是人类，也不会编造主人没说过的事。回答尽量一两句话。',
     // 纪念模式：用于已离世的宠物。开启后语气更轻柔克制，且明确「陪伴而非复活」。
     memorialMode: false,
-    // 互动按钮：每个按钮绑定一个动作（action 对应素材里的某些帧）
-    buttons: [
-      { label: '摸摸头', action: 'pet' },
-      { label: '聊一会儿', action: 'chat' },
-      { label: '休息一下', action: 'rest' }
-    ],
     // 随机回应气泡（无 AI / 兜底时使用）
     responses: ['汪~ 在的！', '又在忙呀，记得喝水', '陪你一会儿', '我一直都在哦'],
     // 闲置气泡
@@ -77,43 +73,30 @@ function todayStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// 动作的可编辑键（与按钮 action 对应）
-const ACTION_KEYS = ['idle', 'pet', 'chat', 'rest', 'sleep'];
-
-// 新素材的默认动作映射：每个动作定格在一个单帧（静止，避免不连贯帧轮播导致“一抽一抽”）。
-// fps=0 表示不循环，只显示 frames[0]。
-function defaultActions(frameCount) {
-  const last = Math.max(0, (frameCount || 1) - 1);
-  const at = (i) => [Math.min(i, last)];
-  return {
-    idle:  { frames: at(0), fps: 0 },
-    pet:   { frames: at(1), fps: 0 },
-    chat:  { frames: at(2), fps: 0 },
-    rest:  { frames: at(3), fps: 0 },
-    sleep: { frames: [last], fps: 0 }
-  };
+// 一段「素材」的播放字段默认值（图片/视频通用）。
+// 图片：cols×rows 网格，frames 指定播哪些格，fps>0 且多帧才循环；单帧/视频忽略这些。
+function withMediaDefaults(m) {
+  if (m.cols == null) m.cols = 1;
+  if (m.rows == null) m.rows = 1;
+  if (!Array.isArray(m.frames)) m.frames = [0];
+  if (m.fps == null) m.fps = 0;
+  return m;
 }
 
-// 兼容旧数据：保证每个图片素材都有 actions；buttons 统一成 {label,action}
+let interactionSeq = 0;
+function newInteraction(label) {
+  return withMediaDefaults({ id: 'it_' + Date.now() + '_' + (interactionSeq++), label: label || '互动', type: null, file: null });
+}
+
+// 兼容旧数据：每个素材补上 interactions 与播放字段；清理旧的 actions/stateMap/buttons
 function normalizeConfig(cfg) {
   (cfg.assets || []).forEach((a) => {
-    if (a.type === 'image' && !a.actions) {
-      // 若有旧的 stateMap，用每段首帧迁移；否则用默认
-      if (a.stateMap) {
-        const f = (k, d) => ({ frames: [(a.stateMap[k] || [d])[0]], fps: 0 });
-        a.actions = { idle: f('idle', 0), pet: f('happy', 1), chat: f('happy', 2), rest: f('idle', 3), sleep: f('sleep', (a.frameCount || 1) - 1) };
-      } else {
-        a.actions = defaultActions(a.frameCount);
-      }
-    }
+    withMediaDefaults(a);
+    if (!Array.isArray(a.interactions)) a.interactions = [];
+    a.interactions.forEach((it) => withMediaDefaults(it));
+    delete a.actions; delete a.stateMap; delete a.frameCount; delete a.animated; delete a.path;
   });
-  const labelToAction = (label) =>
-    /聊|chat|说话/i.test(label) ? 'chat'
-    : /休息|睡|rest|sleep/i.test(label) ? 'rest'
-    : 'pet';
-  cfg.buttons = (cfg.buttons || []).map((b) =>
-    typeof b === 'string' ? { label: b, action: labelToAction(b) } : b
-  );
+  delete cfg.buttons;
   return cfg;
 }
 
@@ -345,27 +328,56 @@ function broadcastConfig() {
 ipcMain.handle('get-config', () => publicConfig());
 
 // 把素材读成 data URL 返回，避免 file:// 图片污染 canvas 导致抠图 getImageData 失败。
-ipcMain.handle('read-asset-data', (_e, id) => {
-  const asset = (config.assets || []).find((a) => a.id === id);
-  if (!asset || !asset.file) return null;
+function mimeOf(file) {
+  const ext = path.extname(file).toLowerCase().replace('.', '');
+  return ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+    : ext === 'webp' ? 'image/webp'
+    : ext === 'gif' ? 'image/gif'
+    : ext === 'mp4' ? 'video/mp4'
+    : ext === 'webm' ? 'video/webm'
+    : ext === 'mov' ? 'video/quicktime'
+    : 'image/png';
+}
+
+// 按文件名读成 data URL（同源，避免污染 canvas）。idle 素材与各互动素材都走这里。
+function readMediaFile(file) {
+  if (!file) return null;
   try {
-    const abs = path.join(USER_MEDIA_DIR, asset.file);
-    const buf = fs.readFileSync(abs);
-    const ext = path.extname(asset.file).toLowerCase().replace('.', '');
-    const mime =
-      ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
-      : ext === 'webp' ? 'image/webp'
-      : ext === 'gif' ? 'image/gif'
-      : ext === 'mp4' ? 'video/mp4'
-      : ext === 'webm' ? 'video/webm'
-      : ext === 'mov' ? 'video/quicktime'
-      : 'image/png';
-    return `data:${mime};base64,${buf.toString('base64')}`;
+    const buf = fs.readFileSync(path.join(USER_MEDIA_DIR, file));
+    return `data:${mimeOf(file)};base64,${buf.toString('base64')}`;
   } catch (e) {
-    console.error('读取素材失败:', e);
+    console.error('读取素材失败:', file, e);
     return null;
   }
+}
+
+ipcMain.handle('read-media', (_e, file) => readMediaFile(file));
+
+ipcMain.handle('read-asset-data', (_e, id) => {
+  const asset = (config.assets || []).find((a) => a.id === id);
+  return asset ? readMediaFile(asset.file) : null;
 });
+
+// 弹文件框选一个素材文件，复制进 user-media，返回 { type, file } 或 null
+async function pickAndCopyMedia(title) {
+  const result = await dialog.showOpenDialog(panelWindow, {
+    title: title || '选择图片 / 视频素材',
+    properties: ['openFile'],
+    filters: [{ name: '宠物素材', extensions: ['png', 'webp', 'gif', 'jpg', 'jpeg', 'mp4', 'webm', 'mov'] }]
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const src = result.filePaths[0];
+  const ext = path.extname(src).toLowerCase();
+  const destName = 'm_' + Date.now() + ext;
+  fs.copyFileSync(src, path.join(USER_MEDIA_DIR, destName));
+  const isVideo = ['.mp4', '.webm', '.mov'].includes(ext);
+  return { type: isVideo ? 'video' : 'image', file: destName, name: path.basename(src) };
+}
+
+function removeMediaFile(file) {
+  try { if (file && fs.existsSync(path.join(USER_MEDIA_DIR, file))) fs.unlinkSync(path.join(USER_MEDIA_DIR, file)); }
+  catch (e) { console.warn('删除素材文件失败:', e); }
+}
 
 ipcMain.handle('save-config', (_e, partial) => {
   config = Object.assign(config, partial);
@@ -391,81 +403,121 @@ ipcMain.handle('set-pet-size', (_e, size) => {
 });
 
 // ---------------------------------------------------------------------------
-// IPC：素材上传 / 删除 / 切换
+// IPC：宠物（asset）与互动（interaction）管理
+// 一个宠物 = 待机素材 + 若干自定义互动，每个互动各带素材。
 // ---------------------------------------------------------------------------
-ipcMain.handle('upload-asset', async () => {
-  const result = await dialog.showOpenDialog(panelWindow, {
-    title: '选择宠物精灵图 / 图片 / 视频',
-    properties: ['openFile'],
-    filters: [
-      { name: '宠物素材', extensions: ['png', 'webp', 'gif', 'jpg', 'jpeg', 'mp4', 'webm', 'mov'] }
-    ]
+const findAsset = (id) => (config.assets || []).find((a) => a.id === id);
+
+// 新增宠物：弹框选「待机素材」，创建一个宠物并切为当前
+ipcMain.handle('add-pet', async () => {
+  const media = await pickAndCopyMedia('选择这个宠物的「待机」素材（图片或视频）');
+  if (!media) return null;
+  const asset = withMediaDefaults({
+    id: 'a_' + Date.now(),
+    name: media.name,
+    type: media.type,
+    file: media.file,
+    interactions: []
   });
-  if (result.canceled || result.filePaths.length === 0) return null;
-
-  const src = result.filePaths[0];
-  const ext = path.extname(src).toLowerCase();
-  const id = 'a_' + Date.now();
-  const destName = id + ext;
-  const dest = path.join(USER_MEDIA_DIR, destName);
-  fs.copyFileSync(src, dest);
-
-  const isVideo = ['.mp4', '.webm', '.mov'].includes(ext);
-  const asset = {
-    id,
-    name: path.basename(src),
-    type: isVideo ? 'video' : 'image',
-    file: destName, // 仅存文件名，绝对路径由 USER_MEDIA_DIR 重建（dev/打包通用）
-    // 精灵图默认网格假设：5 列 4 行 = 20 帧，可在面板调整
-    cols: 5,
-    rows: 4,
-    frameCount: 20,
-    // 动作 → 帧映射：默认每个动作定格单帧（静止），可在后台可视化绑定
-    actions: defaultActions(20)
-  };
-
   config.assets.push(asset);
-  if (!config.currentAssetId) config.currentAssetId = id;
+  config.currentAssetId = asset.id;
   saveConfig(config);
   broadcastConfig();
-  return asset;
+  return publicConfig();
 });
 
-ipcMain.handle('delete-asset', (_e, id) => {
+ipcMain.handle('delete-pet', (_e, id) => {
   const idx = config.assets.findIndex((a) => a.id === id);
-  if (idx === -1) return config;
+  if (idx === -1) return publicConfig();
   const asset = config.assets[idx];
-  try {
-    const abs = path.join(USER_MEDIA_DIR, asset.file || '');
-    if (asset.file && fs.existsSync(abs)) fs.unlinkSync(abs);
-  } catch (e) {
-    console.warn('删除素材文件失败:', e);
-  }
+  removeMediaFile(asset.file);
+  (asset.interactions || []).forEach((it) => removeMediaFile(it.file));
   config.assets.splice(idx, 1);
-  // 若删的是当前素材，切到剩余第一个，否则回到占位
   if (config.currentAssetId === id) {
     config.currentAssetId = config.assets.length ? config.assets[0].id : null;
   }
   saveConfig(config);
   broadcastConfig();
-  return config;
+  return publicConfig();
 });
 
 ipcMain.handle('set-current-asset', (_e, id) => {
   config.currentAssetId = id;
   saveConfig(config);
   broadcastConfig();
-  return config;
+  return publicConfig();
 });
 
-ipcMain.handle('update-asset', (_e, asset) => {
-  const idx = config.assets.findIndex((a) => a.id === asset.id);
-  if (idx !== -1) {
-    config.assets[idx] = Object.assign(config.assets[idx], asset);
-    saveConfig(config);
-    broadcastConfig();
+ipcMain.handle('rename-pet', (_e, id, name) => {
+  const a = findAsset(id);
+  if (a) { a.name = name; saveConfig(config); broadcastConfig(); }
+  return publicConfig();
+});
+
+// 更换某个宠物的「待机」素材
+ipcMain.handle('replace-pet-media', async (_e, id) => {
+  const a = findAsset(id);
+  if (!a) return publicConfig();
+  const media = await pickAndCopyMedia('选择「待机」素材（图片或视频）');
+  if (!media) return publicConfig();
+  removeMediaFile(a.file);
+  a.type = media.type; a.file = media.file; a.name = media.name;
+  withMediaDefaults(a);
+  saveConfig(config);
+  broadcastConfig();
+  return publicConfig();
+});
+
+// 改宠物/互动的播放字段（cols/rows/frames/fps）
+ipcMain.handle('update-asset', (_e, partial) => {
+  const a = findAsset(partial.id);
+  if (a) { Object.assign(a, partial); saveConfig(config); broadcastConfig(); }
+  return publicConfig();
+});
+
+// ---- 互动 ----
+ipcMain.handle('add-interaction', (_e, assetId, label) => {
+  const a = findAsset(assetId);
+  if (a) { a.interactions = a.interactions || []; a.interactions.push(newInteraction(label)); saveConfig(config); broadcastConfig(); }
+  return publicConfig();
+});
+
+ipcMain.handle('delete-interaction', (_e, assetId, interId) => {
+  const a = findAsset(assetId);
+  if (a) {
+    const i = (a.interactions || []).findIndex((it) => it.id === interId);
+    if (i !== -1) { removeMediaFile(a.interactions[i].file); a.interactions.splice(i, 1); saveConfig(config); broadcastConfig(); }
   }
-  return config;
+  return publicConfig();
+});
+
+ipcMain.handle('rename-interaction', (_e, assetId, interId, label) => {
+  const a = findAsset(assetId);
+  const it = a && (a.interactions || []).find((x) => x.id === interId);
+  if (it) { it.label = label; saveConfig(config); broadcastConfig(); }
+  return publicConfig();
+});
+
+ipcMain.handle('update-interaction', (_e, assetId, interId, partial) => {
+  const a = findAsset(assetId);
+  const it = a && (a.interactions || []).find((x) => x.id === interId);
+  if (it) { Object.assign(it, partial); saveConfig(config); broadcastConfig(); }
+  return publicConfig();
+});
+
+// 给某个互动上传/更换素材
+ipcMain.handle('upload-interaction-media', async (_e, assetId, interId) => {
+  const a = findAsset(assetId);
+  const it = a && (a.interactions || []).find((x) => x.id === interId);
+  if (!it) return publicConfig();
+  const media = await pickAndCopyMedia(`选择「${it.label}」的素材（图片或视频）`);
+  if (!media) return publicConfig();
+  removeMediaFile(it.file);
+  it.type = media.type; it.file = media.file;
+  withMediaDefaults(it);
+  saveConfig(config);
+  broadcastConfig();
+  return publicConfig();
 });
 
 // ---------------------------------------------------------------------------
