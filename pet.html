@@ -67,9 +67,10 @@
     justify-content: center;
   }
   #pet:active { cursor: grabbing; }
-  /* 轻微“呼吸”，让定格的单帧姿势也有生命感（不靠帧循环） */
-  @keyframes breathe { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.02); } }
-  #petCanvas { display: block; image-rendering: pixelated; animation: breathe 3.2s ease-in-out infinite; }
+  /* 轻微“呼吸”：只做极小幅度上下浮动（不缩放，避免定格帧看着发胀），且仅静帧时启用 */
+  @keyframes breathe { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+  #petCanvas { display: block; image-rendering: pixelated; }
+  #petCanvas.breathing { animation: breathe 4.5s ease-in-out infinite; }
   #placeholder {
     font-size: 90px;
     animation: bob 2.4s ease-in-out infinite;
@@ -215,21 +216,24 @@ function chromaKey(img) {
 }
 
 // ---- 加载当前素材 ----
+let videoEl = null, isVideo = false;
+function stopVideo() {
+  if (videoEl) { try { videoEl.pause(); } catch (e) {} videoEl.src = ''; videoEl = null; }
+  isVideo = false;
+}
+
 async function loadAsset() {
   currentAsset = null;
   processedCanvas = null;
+  stopVideo();
   if (!config || !config.currentAssetId) { showPlaceholder(); return; }
   const asset = config.assets.find(a => a.id === config.currentAssetId);
   if (!asset) { showPlaceholder(); return; }
   currentAsset = asset;
 
-  if (asset.type !== 'image') {
-    // 视频/动图：MVP 阶段先用占位，后续可换 <video>/<img>
-    showPlaceholder();
-    return;
-  }
+  if (asset.type === 'video') { setupVideo(asset); return; }
 
-  // 取 data URL（同源，避免 canvas 被污染），再做绿幕抠图
+  // ---- 图片精灵图：抠绿幕 + 切帧 ----
   const dataUrl = await window.api.readAssetData(asset.id);
   if (!dataUrl) { showPlaceholder(); return; }
   const img = new Image();
@@ -240,10 +244,42 @@ async function loadAsset() {
     sizeCanvas();
     els.placeholder.style.display = 'none';
     els.canvas.style.display = 'block';
+    els.canvas.classList.add('breathing'); // 静帧才需要“呼吸”
     drawFrame(); // 立刻画出当前动作的定格帧
   };
   img.onerror = () => showPlaceholder();
   img.src = dataUrl;
+}
+
+// ---- 视频：逐帧实时抠绿幕播放（绿底循环视频 → 透明、丝滑、真动）----
+async function setupVideo(asset) {
+  const dataUrl = await window.api.readAssetData(asset.id);
+  if (!dataUrl) { showPlaceholder(); return; }
+  videoEl = document.createElement('video');
+  videoEl.muted = true; videoEl.loop = true; videoEl.autoplay = true; videoEl.playsInline = true;
+  videoEl.addEventListener('loadeddata', () => {
+    sizeCanvas();
+    els.placeholder.style.display = 'none';
+    els.canvas.style.display = 'block';
+    els.canvas.classList.remove('breathing'); // 视频自己会动，不需要呼吸
+    isVideo = true;
+    videoEl.play().catch(() => {});
+  });
+  videoEl.onerror = () => showPlaceholder();
+  videoEl.src = dataUrl;
+}
+
+function drawVideoFrame() {
+  if (!videoEl || videoEl.readyState < 2) return;
+  const size = els.canvas.width;
+  ctx.drawImage(videoEl, 0, 0, size, size);
+  // 小画布上逐帧抠绿幕，开销很低；透明 webm 也兼容（无绿即不处理）
+  const d = ctx.getImageData(0, 0, size, size), p = d.data;
+  for (let i = 0; i < p.length; i += 4) {
+    const r = p[i], g = p[i + 1], b = p[i + 2];
+    if (g > 90 && g > r * 1.35 && g > b * 1.35) p[i + 3] = 0;
+  }
+  ctx.putImageData(d, 0, 0);
 }
 
 function showPlaceholder() {
@@ -282,23 +318,28 @@ function setState(s) {
   if (state !== s) { state = s; frameIndex = 0; drawFrame(); }
 }
 
-// ---- 主循环：单帧动作只画一次保持静止；多帧动作按各自 fps 循环 ----
+// ---- 主循环 ----
+// 视频：按 ~30fps 逐帧抠绿幕；精灵图：单帧静止，多帧按各自 fps 循环
 function tick(now) {
-  const def = currentActionDef();
-  const animated = processedCanvas && def.fps > 0 && def.frames && def.frames.length > 1;
-  if (animated && now - lastFrameTime > 1000 / def.fps) {
-    lastFrameTime = now;
-    frameIndex++;
-    drawFrame();
-  }
-  if (!processedCanvas) {
-    els.placeholder.textContent = state === 'sleep' ? '😴' : '🐶';
-  }
-  // 闲置 → 睡觉
-  if (state === 'idle' && Date.now() - lastInteraction > 30000) {
-    setState('sleep');
-    const msgs = config?.idleMessages || [];
-    if (msgs.length && Math.random() < 0.3) say(msgs[Math.floor(Math.random() * msgs.length)]);
+  if (isVideo) {
+    if (now - lastFrameTime > 33) { lastFrameTime = now; drawVideoFrame(); }
+  } else {
+    const def = currentActionDef();
+    const animated = processedCanvas && def.fps > 0 && def.frames && def.frames.length > 1;
+    if (animated && now - lastFrameTime > 1000 / def.fps) {
+      lastFrameTime = now;
+      frameIndex++;
+      drawFrame();
+    }
+    if (!processedCanvas) {
+      els.placeholder.textContent = state === 'sleep' ? '😴' : '🐶';
+    }
+    // 闲置 → 睡觉（仅精灵图/占位模式有视觉切换）
+    if (state === 'idle' && Date.now() - lastInteraction > 30000) {
+      setState('sleep');
+      const msgs = config?.idleMessages || [];
+      if (msgs.length && Math.random() < 0.3) say(msgs[Math.floor(Math.random() * msgs.length)]);
+    }
   }
   requestAnimationFrame(tick);
 }

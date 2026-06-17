@@ -115,6 +115,26 @@
     </div>
   </div>
 
+  <!-- 生成视频提示词 -->
+  <div class="card">
+    <h2>让宠物“真的动起来”（生成循环视频）</h2>
+    <div class="hint" style="margin-top:0">帧切换不如视频顺滑。用 AI 把你的宠物图生成一段<b>绿底无缝循环</b>短视频，再从上面「上传素材」传进来，桌宠会<b>实时抠绿幕播放</b> —— 透明、丝滑、真动。</div>
+    <label>宠物描述（越具体越像）</label>
+    <input type="text" id="vpDesc" placeholder="例如：一只棕色柴犬，圆脸大眼">
+    <label>想要的动作</label>
+    <select id="vpMotion">
+      <option value="原地轻微呼吸起伏、偶尔眨眼">待机（呼吸 + 眨眼）</option>
+      <option value="开心地左右摇尾巴">摇尾巴</option>
+      <option value="缓慢眨眼并轻轻歪头">眨眼歪头</option>
+      <option value="开心地原地上下蹦跳">蹦跳</option>
+      <option value="原地踏步、走路循环">走路</option>
+    </select>
+    <label>生成提示词（复制到即梦 / 可灵 / Runway / Pika 等图生视频工具）</label>
+    <textarea id="vpPrompt" readonly style="min-height:128px"></textarea>
+    <button class="primary" id="vpCopy" style="margin-top:8px">复制提示词</button>
+    <div class="hint">要点：纯绿底(#00C800) · 正方形 · 主体居中 · 2–4 秒无缝循环 · 导出 mp4 或透明 webm · 体积尽量 ≤3MB。</div>
+  </div>
+
   <!-- 基本设置 -->
   <div class="card">
     <h2>基本设置</h2>
@@ -358,6 +378,30 @@ function renderTrust() {
 }
 
 $('clearTraceBtn').onclick = async () => { config = await window.api.clearTrace(); renderTrust(); };
+
+// ---- 图生视频提示词 ----
+function buildVideoPrompt() {
+  const desc = ($('vpDesc').value || '').trim() || '画面中的宠物';
+  const motion = $('vpMotion').value;
+  return [
+    `请以这张图片中的${desc}为主角，生成一段约 3 秒、可无缝循环的动画视频：${motion}。`,
+    '',
+    '硬性要求：',
+    '1) 纯绿色背景（#00C800），主体与背景边缘清晰，方便后续抠像；',
+    '2) 正方形构图，主体居中、完整不裁切；',
+    '3) 动作自然轻微，首尾画面一致、能无缝循环；',
+    '4) 画面只有宠物本身，不要文字、水印、人手或多余道具；',
+    '5) 时长 2–4 秒，分辨率 ≥512×512，导出 mp4 或带透明通道的 webm。'
+  ].join('\n');
+}
+function refreshVideoPrompt() { if ($('vpPrompt')) $('vpPrompt').value = buildVideoPrompt(); }
+['vpDesc', 'vpMotion'].forEach(id => { const el = $(id); if (el) el.addEventListener('input', refreshVideoPrompt); });
+if ($('vpCopy')) $('vpCopy').onclick = async () => {
+  try { await navigator.clipboard.writeText($('vpPrompt').value); }
+  catch (e) { $('vpPrompt').select(); document.execCommand('copy'); }
+  $('vpCopy').textContent = '✓ 已复制'; setTimeout(() => $('vpCopy').textContent = '复制提示词', 1200);
+};
+refreshVideoPrompt();
 
 function renderAll() { renderAssets(); renderForm(); renderTrust(); }
 

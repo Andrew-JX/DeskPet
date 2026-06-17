@@ -356,6 +356,9 @@ ipcMain.handle('read-asset-data', (_e, id) => {
       ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
       : ext === 'webp' ? 'image/webp'
       : ext === 'gif' ? 'image/gif'
+      : ext === 'mp4' ? 'video/mp4'
+      : ext === 'webm' ? 'video/webm'
+      : ext === 'mov' ? 'video/quicktime'
       : 'image/png';
     return `data:${mime};base64,${buf.toString('base64')}`;
   } catch (e) {
