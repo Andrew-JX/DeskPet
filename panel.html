@@ -267,7 +267,7 @@ function renderLibrary() {
       hint.textContent = '拖动橙色边框圈出宠物所在区域，按列/行自动划分；点任意格子把它裁进库。';
       box.appendChild(hint);
 
-      const wrap = document.createElement('div'); wrap.style.cssText = 'position:relative;display:inline-block;max-width:100%;border:1px solid var(--line);border-radius:6px;overflow:hidden;user-select:none;'; box.appendChild(wrap);
+      const wrap = document.createElement('div'); wrap.style.cssText = 'position:relative;display:inline-block;max-width:100%;border:1px solid var(--line);border-radius:6px;user-select:none;'; box.appendChild(wrap);
       getLibCanvas(m).then(cv => {
         if (!cv) { wrap.innerHTML = '<div class="hint" style="padding:8px">读取图片失败</div>'; return; }
         const dispW = Math.min(320, cv.width), scale = dispW / cv.width, dispH = Math.round(cv.height * scale);
@@ -304,14 +304,18 @@ function renderLibrary() {
           const outline = document.createElement('div');
           outline.style.cssText = `position:absolute;left:${bx}px;top:${by}px;width:${bw}px;height:${bh}px;box-sizing:border-box;border:2px solid var(--accent);pointer-events:none;`;
           layer.appendChild(outline);
+          const T = 12; // 抓取条厚度（贴框内侧，看得见、好抓）
           const edges = [
-            ['l', `left:${bx-4}px;top:${by}px;width:8px;height:${bh}px;cursor:ew-resize;`],
-            ['r', `left:${bx+bw-4}px;top:${by}px;width:8px;height:${bh}px;cursor:ew-resize;`],
-            ['t', `left:${bx}px;top:${by-4}px;width:${bw}px;height:8px;cursor:ns-resize;`],
-            ['b', `left:${bx}px;top:${by+bh-4}px;width:${bw}px;height:8px;cursor:ns-resize;`]
+            ['l', `left:${bx}px;top:${by}px;width:${T}px;height:${bh}px;cursor:ew-resize;`],
+            ['r', `left:${bx+bw-T}px;top:${by}px;width:${T}px;height:${bh}px;cursor:ew-resize;`],
+            ['t', `left:${bx}px;top:${by}px;width:${bw}px;height:${T}px;cursor:ns-resize;`],
+            ['b', `left:${bx}px;top:${by+bh-T}px;width:${bw}px;height:${T}px;cursor:ns-resize;`]
           ];
           edges.forEach(([k, css]) => {
-            const h = document.createElement('div'); h.style.cssText = 'position:absolute;z-index:5;' + css;
+            const h = document.createElement('div');
+            h.style.cssText = 'position:absolute;z-index:6;background:rgba(255,183,77,.28);' + css;
+            h.onmouseenter = () => h.style.background = 'rgba(255,183,77,.5)';
+            h.onmouseleave = () => h.style.background = 'rgba(255,183,77,.28)';
             h.onmousedown = (e) => startDrag(e, k);
             layer.appendChild(h);
           });
