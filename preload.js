@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('api', {
   addLibraryMedia: () => ipcRenderer.invoke('add-library-media'),
   updateLibraryMedia: (libId, partial) => ipcRenderer.invoke('update-library-media', libId, partial),
   sliceLibraryFrame: (libId, index) => ipcRenderer.invoke('slice-library-frame', libId, index),
+  saveCroppedFrame: (name, dataUrl) => ipcRenderer.invoke('save-cropped-frame', name, dataUrl),
   deleteLibraryMedia: (libId) => ipcRenderer.invoke('delete-library-media', libId),
 
   movePet: (dx, dy) => ipcRenderer.invoke('move-pet', dx, dy),

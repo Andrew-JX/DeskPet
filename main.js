@@ -557,6 +557,22 @@ ipcMain.handle('slice-library-frame', (_e, libId, index) => {
   return publicConfig();
 });
 
+// 渲染层把某一格裁好（已抠绿幕、透明）的 PNG dataURL 发来，存为独立素材
+ipcMain.handle('save-cropped-frame', (_e, name, dataUrl) => {
+  const mm = /^data:image\/png;base64,(.+)$/.exec(dataUrl || '');
+  if (!mm) return publicConfig();
+  const file = 'm_' + Date.now() + '.png';
+  try { fs.writeFileSync(path.join(USER_MEDIA_DIR, file), Buffer.from(mm[1], 'base64')); }
+  catch (e) { console.error('保存裁剪帧失败:', e); return publicConfig(); }
+  config.library = config.library || [];
+  config.library.push(withMediaDefaults({
+    id: 'lib_' + Date.now(), name: name || '帧', type: 'image', file, derived: true
+  }));
+  saveConfig(config);
+  broadcastConfig();
+  return publicConfig();
+});
+
 ipcMain.handle('delete-library-media', (_e, libId) => {
   const idx = (config.library || []).findIndex((m) => m.id === libId);
   if (idx !== -1) {

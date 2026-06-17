@@ -1,6 +1,6 @@
 {
   "name": "deskpet",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "把你的宠物变成陪你上班的桌面伙伴 —— 可信、可换皮、可扩展的桌宠 Agent",
   "main": "main.js",
   "author": "Andrew-JX",
