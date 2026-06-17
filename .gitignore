@@ -22,3 +22,6 @@ skills/
 templates/
 memory/
 .ai-pm-dev/
+
+# harness-local
+.claude/

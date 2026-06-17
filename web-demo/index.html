@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DeskPet · 丢张绿底图就换皮（在线 Demo）</title>
+<style>
+  :root { --bg:#0f1117; --card:#1a1d27; --line:#2a2e3b; --fg:#e9eaf0; --muted:#9aa1b2; --accent:#ffb74d; --accent2:#7cc4ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:radial-gradient(1200px 600px at 70% -10%, #1c2436, var(--bg)); color:var(--fg);
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif; line-height:1.5; }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px 60px; }
+  h1 { font-size:26px; margin:0 0 6px; }
+  .lead { color:var(--muted); margin:0 0 24px; font-size:15px; }
+  .lead b { color:var(--accent); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  @media (max-width:760px){ .grid{ grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; }
+  .card h2 { font-size:13px; letter-spacing:.04em; text-transform:uppercase; color:var(--accent2); margin:0 0 12px; }
+  /* 棋盘格 = 透明背景，证明绿幕被抠掉 */
+  .stage { position:relative; height:300px; border-radius:12px; display:flex; align-items:center; justify-content:center;
+    background-image:linear-gradient(45deg,#2b2f3c 25%,transparent 25%),linear-gradient(-45deg,#2b2f3c 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#2b2f3c 75%),linear-gradient(-45deg,transparent 75%,#2b2f3c 75%);
+    background-size:22px 22px; background-position:0 0,0 11px,11px -11px,-11px 0; }
+  #petCanvas { image-rendering:pixelated; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+  .states button, .drop label, .num { font:inherit; }
+  .states { display:flex; gap:8px; }
+  .states button { border:1px solid var(--line); background:#222633; color:var(--fg); border-radius:10px; padding:7px 14px; cursor:pointer; }
+  .states button.active { background:var(--accent); color:#1a1a1a; border-color:var(--accent); font-weight:600; }
+  .drop { border:1.5px dashed var(--line); border-radius:12px; padding:18px; text-align:center; color:var(--muted); cursor:pointer; display:block; transition:.15s; }
+  .drop:hover, .drop.over { border-color:var(--accent); color:var(--fg); background:#1d2230; }
+  .drop input { display:none; }
+  .ctrls { display:flex; gap:14px; align-items:center; margin-top:14px; flex-wrap:wrap; }
+  .ctrls label { font-size:12px; color:var(--muted); }
+  .num { width:58px; background:#14161e; border:1px solid var(--line); color:var(--fg); border-radius:8px; padding:6px 8px; }
+  .thumb { width:100%; border-radius:10px; border:1px solid var(--line); display:block; }
+  .steps { margin:8px 0 0; padding-left:18px; color:var(--muted); font-size:13px; }
+  .steps li { margin:3px 0; }
+  .foot { margin-top:26px; color:var(--muted); font-size:13px; }
+  .foot a { color:var(--accent2); }
+  .pill { display:inline-block; background:#222633; border:1px solid var(--line); border-radius:999px; padding:3px 10px; font-size:12px; color:var(--muted); margin-right:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🐾 DeskPet · 丢张绿底图就换皮</h1>
+  <p class="lead">这是桌宠核心能力的在线演示：<b>上传一张绿底精灵图 → 浏览器实时绿幕抠图 + 按网格切帧 + 状态机动画</b>。
+    桌面版里，这只宠物会透明悬浮在你所有窗口之上陪你工作。下面这只就是程序生成的示例，<b>你也可以拖入自己的图</b>。</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>效果（透明背景 = 绿幕已抠掉）</h2>
+      <div class="stage"><canvas id="petCanvas" width="220" height="220"></canvas></div>
+      <div class="row states" id="states">
+        <button data-state="idle" class="active">待机</button>
+        <button data-state="walk">走路</button>
+        <button data-state="happy">开心</button>
+        <button data-state="sleep">睡觉</button>
+      </div>
+      <div class="ctrls">
+        <label>列 <input class="num" id="cols" type="number" value="5" min="1"></label>
+        <label>行 <input class="num" id="rows" type="number" value="4" min="1"></label>
+        <label>速度 <input class="num" id="fps" type="number" value="6" min="1" max="24"> fps</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>换一张试试</h2>
+      <label class="drop" id="drop">
+        把<b>绿底精灵图</b>拖到这里，或点击选择
+        <input type="file" id="file" accept="image/png,image/webp,image/jpeg">
+      </label>
+      <ol class="steps">
+        <li>图片需为<b>纯绿色背景</b>（越纯越好抠）</li>
+        <li>多个动作排成<b>网格</b>（示例是 5 列 × 4 行）</li>
+        <li>每行一个状态：待机 / 走路 / 开心 / 睡觉</li>
+      </ol>
+      <h2 style="margin-top:18px;">原图（含绿底）</h2>
+      <img id="thumb" class="thumb" alt="原始精灵图">
+    </div>
+  </div>
+
+  <div class="foot">
+    <span class="pill">规则切帧</span><span class="pill">前端绿幕抠图</span><span class="pill">状态机动画</span><br><br>
+    桌面完整版（可对话 / 番茄钟 / 纪念模式 / 可信工具调用）见
+    <a href="https://github.com/Andrew-JX/DeskPet" target="_blank" rel="noopener">GitHub · Andrew-JX/DeskPet</a>，
+    可在 <a href="https://github.com/Andrew-JX/DeskPet/releases" target="_blank" rel="noopener">Releases</a> 一键下载安装。
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('petCanvas'), ctx = cv.getContext('2d');
+let processed = null, frameW = 0, frameH = 0;
+let cols = 5, rows = 4, fps = 6;
+let state = 'idle', frame = 0, last = 0;
+const STATE_ROW = { idle:0, walk:1, happy:2, sleep:3 };
+
+function chromaKey(img){
+  const off = document.createElement('canvas');
+  off.width = img.naturalWidth; off.height = img.naturalHeight;
+  const o = off.getContext('2d'); o.drawImage(img,0,0);
+  const d = o.getImageData(0,0,off.width,off.height), p = d.data;
+  for (let i=0;i<p.length;i+=4){
+    const r=p[i],g=p[i+1],b=p[i+2];
+    if (g>90 && g>r*1.35 && g>b*1.35) p[i+3]=0;
+  }
+  o.putImageData(d,0,0); return off;
+}
+
+function load(src){
+  const img = new Image();
+  img.onload = ()=>{
+    document.getElementById('thumb').src = src;
+    processed = chromaKey(img);
+    frameW = Math.floor(processed.width/cols);
+    frameH = Math.floor(processed.height/rows);
+  };
+  img.src = src;
+}
+
+function draw(){
+  if (!processed) return;
+  const row = Math.min(STATE_ROW[state], rows-1);
+  const f = frame % cols;
+  const sx = f*frameW, sy = row*frameH;
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.drawImage(processed, sx, sy, frameW, frameH, 0, 0, cv.width, cv.height);
+}
+function tick(now){
+  if (now-last > 1000/fps){ last=now; frame++; draw(); }
+  requestAnimationFrame(tick);
+}
+
+// 控件
+document.getElementById('states').addEventListener('click', e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  state = b.dataset.state; frame = 0;
+  [...document.querySelectorAll('#states button')].forEach(x=>x.classList.toggle('active', x===b));
+});
+const sync = ()=>{ cols=+document.getElementById('cols').value||5; rows=+document.getElementById('rows').value||4; fps=+document.getElementById('fps').value||6;
+  if(processed){ frameW=Math.floor(processed.width/cols); frameH=Math.floor(processed.height/rows);} };
+['cols','rows','fps'].forEach(id=>document.getElementById(id).addEventListener('input', sync));
+
+// 上传 / 拖放
+const drop = document.getElementById('drop'), file = document.getElementById('file');
+file.addEventListener('change', ()=>{ if(file.files[0]) readFile(file.files[0]); });
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev, e=>{e.preventDefault(); drop.classList.add('over');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev, e=>{e.preventDefault(); drop.classList.remove('over');}));
+drop.addEventListener('drop', e=>{ const f=e.dataTransfer.files[0]; if(f) readFile(f); });
+function readFile(f){ const r=new FileReader(); r.onload=()=>load(r.result); r.readAsDataURL(f); }
+
+// 默认载入示例
+load('sample.png');
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

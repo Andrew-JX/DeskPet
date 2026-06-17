@@ -61,6 +61,14 @@ npm run dist     # 在 dist/ 生成 Windows 安装包 + 便携版
 - **双击** → 打开聊天输入框，和它对话
 - **拖动** → 在桌面任意移动
 
+## 先看效果 / 快速验证
+
+不想装也不想自己做图？两种零成本方式：
+
+- **在线体验**：打开 [`web-demo/`](web-demo/)（`npx serve web-demo`，或部署成链接），拖一张绿底图进去即时看抠图+动画。
+- **示例素材**：仓库自带 [`samples/sample-dog-greenscreen.png`](samples/sample-dog-greenscreen.png)（程序生成的 5×4 绿底精灵图）。在桌面版后台「上传素材」选它，立刻看到换皮生效。
+  - 想重新生成：`node tools/make-sample-sprite.js`
+
 ## 上传你自己的宠物
 
 1. 点宠物上的 **⚙** 打开后台
