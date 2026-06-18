@@ -100,6 +100,7 @@ function normalizeConfig(cfg) {
     withMediaDefaults(a);
     if (!Array.isArray(a.interactions)) a.interactions = [];
     a.interactions.forEach((it) => withMediaDefaults(it));
+    if (!a.events || typeof a.events !== 'object') a.events = {}; // 系统动作素材：click/chat/pomodoro/sit
     delete a.actions; delete a.stateMap; delete a.frameCount; delete a.animated; delete a.path;
   });
   delete cfg.buttons;
@@ -437,7 +438,8 @@ ipcMain.handle('add-pet', () => {
     name: '新宠物',
     type: null,
     file: null,
-    interactions: []
+    interactions: [],
+    events: {}
   });
   config.assets.push(asset);
   config.currentAssetId = asset.id;
@@ -500,6 +502,18 @@ ipcMain.handle('rename-interaction', (_e, assetId, interId, label) => {
   const a = findAsset(assetId);
   const it = a && (a.interactions || []).find((x) => x.id === interId);
   if (it) { it.label = label; saveConfig(config); broadcastConfig(); }
+  return publicConfig();
+});
+
+// 绑定系统动作（点击/聊天/番茄钟/久坐）的素材；传空则清除
+ipcMain.handle('set-event-material', (_e, assetId, key, descriptor) => {
+  const a = findAsset(assetId);
+  if (a) {
+    a.events = a.events || {};
+    if (descriptor && descriptor.file) a.events[key] = withMediaDefaults(Object.assign({}, descriptor));
+    else delete a.events[key];
+    saveConfig(config); broadcastConfig();
+  }
   return publicConfig();
 });
 

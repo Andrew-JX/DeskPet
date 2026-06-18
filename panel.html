@@ -114,6 +114,9 @@
       <div id="interList"></div>
       <button class="ghost" id="addInterBtn" style="margin-top:6px;">+ 添加互动</button>
       <div class="hint">给互动改个名（摸摸头 / 睡觉…），再从素材库选它的素材。没有就先去上面「上传素材到库」。</div>
+
+      <label style="margin-top:14px;">小工具动作（可选）—— 触发时播对应素材，不选则只冒泡</label>
+      <div id="eventList"></div>
     </div>
   </div>
 
@@ -390,6 +393,21 @@ function renderPetEditor() {
       renderAll();
     }));
     il.appendChild(box);
+  });
+
+  // 小工具动作（系统事件）的素材绑定
+  const evDefs = [['click', '点击反应'], ['chat', '聊天时'], ['pomodoro', '番茄钟提醒'], ['sit', '久坐提醒']];
+  const ev = p.events || {};
+  const el = $('eventList'); el.innerHTML = '';
+  evDefs.forEach(([key, label]) => {
+    const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:6px;';
+    const lb = document.createElement('span'); lb.style.cssText = 'font-size:12px;width:84px;color:var(--muted);flex:none;'; lb.textContent = label;
+    const picker = materialPicker(ev[key], async (desc) => {
+      config = await window.api.setEventMaterial(config.currentAssetId, key, desc);
+      renderAll();
+    });
+    picker.style.flex = '1';
+    row.append(lb, picker); el.appendChild(row);
   });
 }
 

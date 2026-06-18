@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteInteraction: (assetId, interId) => ipcRenderer.invoke('delete-interaction', assetId, interId),
   renameInteraction: (assetId, interId, label) => ipcRenderer.invoke('rename-interaction', assetId, interId, label),
   setInteractionMaterial: (assetId, interId, descriptor) => ipcRenderer.invoke('set-interaction-material', assetId, interId, descriptor),
+  setEventMaterial: (assetId, key, descriptor) => ipcRenderer.invoke('set-event-material', assetId, key, descriptor),
   // 素材库
   addLibraryMedia: () => ipcRenderer.invoke('add-library-media'),
   updateLibraryMedia: (libId, partial) => ipcRenderer.invoke('update-library-media', libId, partial),

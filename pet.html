@@ -372,6 +372,17 @@ function playInteraction(it) {
   returnTimer = setTimeout(() => { if (playingInterId === it.id) showIdle(); }, 4000);
 }
 
+// 系统动作（点击/聊天/番茄钟/久坐）绑定的素材
+function eventMat(key) { return (currentAsset && currentAsset.events) ? currentAsset.events[key] : null; }
+function playTransient(mat, ms = 2500) {
+  if (!mat || !mat.file) return;
+  const token = 'evt_' + Date.now();
+  playingInterId = token;
+  playMaterial(mat);
+  clearTimeout(returnTimer);
+  returnTimer = setTimeout(() => { if (playingInterId === token) showIdle(); }, ms);
+}
+
 // ---- 点击宠物弹出的菜单 ----
 function openMenu() { menuOpen = true; renderToolbar(); els.toolbar.classList.add('open'); }
 function closeMenu() { menuOpen = false; els.toolbar.classList.remove('open'); els.chatRow.classList.remove('show'); }
@@ -381,7 +392,10 @@ function onPetClick() {
   lastInteraction = Date.now();
   window.api.statEvent('interaction');
   toggleMenu();
-  if (menuOpen) { const pool = config?.responses || ['汪~']; say(pool[Math.floor(Math.random() * pool.length)]); }
+  if (menuOpen) {
+    playTransient(eventMat('click'), 2000);
+    const pool = config?.responses || ['汪~']; say(pool[Math.floor(Math.random() * pool.length)]);
+  }
 }
 
 // ---- 手动拖动 + 点击判定：拖动时静默移动，几乎没动才算点击 ----
@@ -426,6 +440,7 @@ els.chatInput.addEventListener('keydown', async (e) => {
   say('……', 60000);            // 思考中
   const res = await window.api.aiChat(text);
   say(res.text, 8000);
+  playTransient(eventMat('chat'), 5000);
   // 写操作：弹出确认按钮，等用户拍板
   if (res.proposal) {
     pendingProposalId = res.proposal.id;
@@ -492,7 +507,7 @@ function togglePomodoro() {
   pomoTick = setInterval(() => {
     if (Date.now() >= pomoEndAt) {
       const msg = config?.pomodoro?.workEndMessage || '一个番茄钟到啦，起来活动一下！';
-      stopPomodoro(); say(msg, 6000); window.api.statEvent('pomodoro');
+      stopPomodoro(); say(msg, 6000); window.api.statEvent('pomodoro'); playTransient(eventMat('pomodoro'), 4000);
     } else updatePomoBadge();
   }, 1000);
   renderToolbar();
@@ -502,7 +517,7 @@ function toggleSit() {
   else {
     sitOn = true;
     const mins = Math.max(1, (config?.pomodoro?.sitReminderMinutes) || 45);
-    sitTimer = setInterval(() => say(config?.pomodoro?.sitMessage || '坐久啦，起来走两步~', 6000), mins * 60000);
+    sitTimer = setInterval(() => { playTransient(eventMat('sit'), 4000); say(config?.pomodoro?.sitMessage || '坐久啦，起来走两步~', 6000); }, mins * 60000);
     say(`久坐提醒开啦，每 ${mins} 分钟叫你一次`);
   }
   renderToolbar();
@@ -514,7 +529,8 @@ function petSignature(cfg) {
   return JSON.stringify({
     size: cfg && cfg.petSize,
     a: a ? { id: a.id, t: a.type, f: a.file, c: a.cols, r: a.rows, fr: a.frames, fp: a.fps,
-      it: (a.interactions || []).map(i => [i.id, i.label, i.type, i.file, i.cols, i.rows, i.frames, i.fps]) } : null
+      it: (a.interactions || []).map(i => [i.id, i.label, i.type, i.file, i.cols, i.rows, i.frames, i.fps]),
+      ev: a.events || {} } : null
   });
 }
 let lastPetSig = '';
