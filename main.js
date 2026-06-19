@@ -277,6 +277,35 @@ async function modelWrap(userText, contextNote) {
   }
 }
 
+// 首次启动（无任何宠物/素材）时，自动放一只可玩的示例宠物，开箱即用
+function seedDefaultPetIfEmpty() {
+  if ((config.assets && config.assets.length) || (config.library && config.library.length)) return;
+  const src = path.join(__dirname, 'samples', 'sample-dog-greenscreen.png');
+  if (!fs.existsSync(src)) return;
+  const file = 'sample_' + Date.now() + '.png';
+  try { fs.copyFileSync(src, path.join(USER_MEDIA_DIR, file)); }
+  catch (e) { console.error('seed 示例宠物失败:', e); return; }
+  const cols = 5, rows = 4, b = Date.now();
+  const frame = (i) => ({ type: 'image', file, cols, rows, frames: [i], fps: 0 }); // 示例图按行：0待机/10开心/15睡觉
+  config.library = [
+    withMediaDefaults({ id: 'lib_' + b + '_src', name: '示例狗 · 精灵图', type: 'image', file, cols, rows }),
+    withMediaDefaults({ id: 'lib_' + b + '_f0', name: '示例狗 · 待机', derived: true, ...frame(0) }),
+    withMediaDefaults({ id: 'lib_' + b + '_f10', name: '示例狗 · 开心', derived: true, ...frame(10) }),
+    withMediaDefaults({ id: 'lib_' + b + '_f15', name: '示例狗 · 睡觉', derived: true, ...frame(15) })
+  ];
+  config.assets = [withMediaDefaults({
+    id: 'a_' + b, name: '豆豆（示例）',
+    ...frame(0),
+    interactions: [
+      withMediaDefaults({ id: 'it_' + b + '_1', label: '摸摸头', ...frame(10) }),
+      withMediaDefaults({ id: 'it_' + b + '_2', label: '睡觉', ...frame(15) })
+    ],
+    events: { click: withMediaDefaults({ ...frame(10) }) }
+  })];
+  config.currentAssetId = 'a_' + b;
+  saveConfig(config);
+}
+
 // ---------------------------------------------------------------------------
 // 窗口
 // ---------------------------------------------------------------------------
@@ -700,6 +729,7 @@ ipcMain.handle('clear-trace', () => {
 app.whenReady().then(() => {
   initPaths();
   config = loadConfig();
+  seedDefaultPetIfEmpty();
   createPetWindow();
 
   // 陪伴时长：应用运行期间每分钟 +1（确定性，不由 AI 估算）

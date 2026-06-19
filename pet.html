@@ -428,6 +428,17 @@ document.addEventListener('mousedown', (e) => {
   closeMenu();
 });
 
+// 右键宠物 → 直接打开后台
+els.pet.addEventListener('contextmenu', (e) => { e.preventDefault(); window.api.openPanel(); });
+
+// 生命感：长时间没互动时偶尔轻轻碎碎念（不打扰互动/专注/菜单）
+setInterval(() => {
+  if (playingInterId || menuOpen || pomoEndAt) return;
+  if (Date.now() - lastInteraction < 90000) return;
+  const msgs = config?.idleMessages || [];
+  if (msgs.length && Math.random() < 0.5) say(msgs[Math.floor(Math.random() * msgs.length)]);
+}, 180000);
+
 function hideConfirm() { els.confirmRow.classList.remove('show'); pendingProposalId = null; }
 
 els.chatInput.addEventListener('keydown', async (e) => {
@@ -547,7 +558,7 @@ async function init() {
   loadCurrentPet();
   requestAnimationFrame(tick);
   // 开场打个招呼
-  setTimeout(() => say(`嗨，我是${currentAsset?.name || config?.petName || '它'}，今天也一起加油~`), 800);
+  setTimeout(() => say(`嗨我是${currentAsset?.name || config?.petName || '它'}~ 点我有反应、拖我换位置，点 ⚙ 能换成你自己的宠物`, 6000), 800);
 }
 
 window.api.onConfigUpdated((cfg) => {
