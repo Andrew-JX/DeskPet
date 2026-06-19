@@ -496,6 +496,7 @@ function updatePomoBadge() {
 function stopPomodoro() {
   clearInterval(pomoTick); pomoTick = null; pomoEndAt = 0;
   els.pomoBadge.classList.remove('show');
+  if (playingInterId === 'focus') showIdle(); // 退出“专注中”姿势
   renderToolbar();
 }
 function togglePomodoro() {
@@ -504,6 +505,9 @@ function togglePomodoro() {
   pomoEndAt = Date.now() + mins * 60000;
   say(`开始专注 ${mins} 分钟，我陪你~`);
   updatePomoBadge();
+  // 专注期间持续“专注中”姿势（点开始即切换，作为开始反馈，并保持到结束）
+  const focus = eventMat('focus');
+  if (focus && focus.file) { playingInterId = 'focus'; clearTimeout(returnTimer); playMaterial(focus); }
   pomoTick = setInterval(() => {
     if (Date.now() >= pomoEndAt) {
       const msg = config?.pomodoro?.workEndMessage || '一个番茄钟到啦，起来活动一下！';

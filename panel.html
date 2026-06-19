@@ -396,7 +396,7 @@ function renderPetEditor() {
   });
 
   // 小工具动作（系统事件）的素材绑定
-  const evDefs = [['click', '点击反应'], ['chat', '聊天时'], ['pomodoro', '番茄钟提醒'], ['sit', '久坐提醒']];
+  const evDefs = [['click', '点击反应'], ['chat', '聊天时'], ['focus', '专注中(番茄钟)'], ['pomodoro', '番茄钟提醒'], ['sit', '久坐提醒']];
   const ev = p.events || {};
   const el = $('eventList'); el.innerHTML = '';
   evDefs.forEach(([key, label]) => {
