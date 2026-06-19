@@ -402,22 +402,23 @@ function onPetClick() {
   }
 }
 
-// ---- 手动拖动 + 点击判定（用 pointer 捕获，拖到屏幕任何位置都不丢事件）----
-let dragging = false, lastSX = 0, lastSY = 0, movedDist = 0;
+// ---- 手动拖动 + 点击判定 ----
+// 绝对定位：按下记住鼠标相对窗口的抓取点，之后窗口左上角 = 当前鼠标 − 抓取点。
+// 不累加位移 → 不漂移；pointer 捕获 → 拖到屏幕任何角落都不丢事件。
+let dragging = false, grabX = 0, grabY = 0, downSX = 0, downSY = 0, movedDist = 0;
 els.pet.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
-  dragging = true; movedDist = 0; lastSX = e.screenX; lastSY = e.screenY;
+  dragging = true; movedDist = 0;
+  downSX = e.screenX; downSY = e.screenY;
+  grabX = e.screenX - window.screenX;   // 鼠标相对窗口左上角的偏移（拖动全程固定）
+  grabY = e.screenY - window.screenY;
   try { els.pet.setPointerCapture(e.pointerId); } catch (err) {}
   e.preventDefault();
 });
 els.pet.addEventListener('pointermove', (e) => {
   if (!dragging) return;
-  const dx = e.screenX - lastSX, dy = e.screenY - lastSY;
-  if (dx || dy) {
-    movedDist += Math.abs(dx) + Math.abs(dy);
-    if (movedDist > 4) window.api.movePet(dx, dy);
-    lastSX = e.screenX; lastSY = e.screenY;
-  }
+  movedDist = Math.abs(e.screenX - downSX) + Math.abs(e.screenY - downSY);
+  if (movedDist > 4) window.api.movePetTo(e.screenX - grabX, e.screenY - grabY);
 });
 els.pet.addEventListener('pointerup', (e) => {
   if (!dragging) return;

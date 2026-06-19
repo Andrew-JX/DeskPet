@@ -602,21 +602,34 @@ ipcMain.handle('delete-library-media', (_e, libId) => {
 // ---------------------------------------------------------------------------
 // IPC：移动宠物窗口（渲染层走路时调用）
 // ---------------------------------------------------------------------------
-ipcMain.handle('move-pet', (_e, dx, dy) => {
-  if (!petWindow || petWindow.isDestroyed()) return;
-  const [x, y] = petWindow.getPosition();
-  const [w, h] = petWindow.getSize();
-  // 夹在「所有屏幕」的并集范围内 —— 支持多显示器跨屏拖动，又不会拖丢
+// 所有显示器并集范围（夹边界用，支持多屏又不拖丢）
+function unionBounds() {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const d of screen.getAllDisplays()) {
     const b = d.bounds;
     minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
     maxX = Math.max(maxX, b.x + b.width); maxY = Math.max(maxY, b.y + b.height);
   }
-  const nx = Math.max(minX, Math.min(maxX - w, x + dx));
-  const ny = Math.max(minY, Math.min(maxY - h, y + dy));
-  petWindow.setPosition(Math.round(nx), Math.round(ny));
+  return { minX, minY, maxX, maxY };
+}
+
+// 相对移动（散步用）
+ipcMain.handle('move-pet', (_e, dx, dy) => {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  const [x, y] = petWindow.getPosition();
+  movePetTo(x + dx, y + dy);
 });
+
+// 绝对移动（拖拽用）：窗口左上角直接放到 (x,y)，不累加、不漂移
+function movePetTo(x, y) {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  const [w, h] = petWindow.getSize();
+  const u = unionBounds();
+  const nx = Math.max(u.minX, Math.min(u.maxX - w, x));
+  const ny = Math.max(u.minY, Math.min(u.maxY - h, y));
+  petWindow.setPosition(Math.round(nx), Math.round(ny));
+}
+ipcMain.handle('move-pet-to', (_e, x, y) => movePetTo(x, y));
 
 // ---------------------------------------------------------------------------
 // IPC：AI 对话（意图路由 → 工具调用 → 模型/模板包装）

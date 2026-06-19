@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteLibraryMedia: (libId) => ipcRenderer.invoke('delete-library-media', libId),
 
   movePet: (dx, dy) => ipcRenderer.invoke('move-pet', dx, dy),
+  movePetTo: (x, y) => ipcRenderer.invoke('move-pet-to', x, y),
   aiChat: (text) => ipcRenderer.invoke('ai-chat', text),
   confirmTool: (id, ok) => ipcRenderer.invoke('confirm-tool', id, ok),
   statEvent: (kind) => ipcRenderer.invoke('stat-event', kind),
