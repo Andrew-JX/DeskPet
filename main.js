@@ -304,6 +304,10 @@ function createPetWindow() {
 
   petWindow.setAlwaysOnTop(true, 'screen-saver');
   petWindow.loadFile('pet.html');
+  // 默认鼠标穿透（forward 让窗口仍能收到移动事件，用于检测指针进入宠物）
+  petWindow.webContents.once('did-finish-load', () => {
+    if (petWindow && !petWindow.isDestroyed()) petWindow.setIgnoreMouseEvents(true, { forward: true });
+  });
 
   // 默认放到屏幕右下角
   const display = screen.getPrimaryDisplay();
@@ -630,6 +634,23 @@ function movePetTo(x, y) {
   petWindow.setPosition(Math.round(nx), Math.round(ny));
 }
 ipcMain.handle('move-pet-to', (_e, x, y) => movePetTo(x, y));
+
+// 拖拽：抓取偏移在主进程按「窗口真实位置」算，绝对定位、零漂移
+let dragOffset = null;
+ipcMain.handle('drag-start', (_e, sx, sy) => {
+  if (!petWindow || petWindow.isDestroyed()) { dragOffset = null; return; }
+  const [wx, wy] = petWindow.getPosition();
+  dragOffset = { dx: wx - sx, dy: wy - sy };
+});
+ipcMain.handle('drag-move', (_e, sx, sy) => {
+  if (dragOffset) movePetTo(sx + dragOffset.dx, sy + dragOffset.dy);
+});
+ipcMain.handle('drag-end', () => { dragOffset = null; });
+
+// 鼠标穿透：true=点得到桌面（穿透），false=接管点击。指针在宠物/菜单上才接管。
+ipcMain.handle('set-ignore-mouse', (_e, ignore) => {
+  if (petWindow && !petWindow.isDestroyed()) petWindow.setIgnoreMouseEvents(!!ignore, { forward: true });
+});
 
 // ---------------------------------------------------------------------------
 // IPC：AI 对话（意图路由 → 工具调用 → 模型/模板包装）

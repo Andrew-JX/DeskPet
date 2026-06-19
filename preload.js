@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld('api', {
 
   movePet: (dx, dy) => ipcRenderer.invoke('move-pet', dx, dy),
   movePetTo: (x, y) => ipcRenderer.invoke('move-pet-to', x, y),
+  dragStart: (x, y) => ipcRenderer.invoke('drag-start', x, y),
+  dragMove: (x, y) => ipcRenderer.invoke('drag-move', x, y),
+  dragEnd: () => ipcRenderer.invoke('drag-end'),
+  setIgnoreMouse: (ignore) => ipcRenderer.invoke('set-ignore-mouse', ignore),
   aiChat: (text) => ipcRenderer.invoke('ai-chat', text),
   confirmTool: (id, ok) => ipcRenderer.invoke('confirm-tool', id, ok),
   statEvent: (kind) => ipcRenderer.invoke('stat-event', kind),

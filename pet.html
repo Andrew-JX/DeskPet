@@ -403,28 +403,39 @@ function onPetClick() {
 }
 
 // ---- 手动拖动 + 点击判定 ----
-// 绝对定位：按下记住鼠标相对窗口的抓取点，之后窗口左上角 = 当前鼠标 − 抓取点。
-// 不累加位移 → 不漂移；pointer 捕获 → 拖到屏幕任何角落都不丢事件。
-let dragging = false, grabX = 0, grabY = 0, downSX = 0, downSY = 0, movedDist = 0;
+// 偏移量由主进程按窗口真实位置计算（drag-start 记录，drag-move 绝对定位），零漂移。
+let dragging = false, downSX = 0, downSY = 0, movedDist = 0;
 els.pet.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
-  dragging = true; movedDist = 0;
-  downSX = e.screenX; downSY = e.screenY;
-  grabX = e.screenX - window.screenX;   // 鼠标相对窗口左上角的偏移（拖动全程固定）
-  grabY = e.screenY - window.screenY;
+  dragging = true; movedDist = 0; downSX = e.screenX; downSY = e.screenY;
+  window.api.dragStart(e.screenX, e.screenY);
   try { els.pet.setPointerCapture(e.pointerId); } catch (err) {}
   e.preventDefault();
 });
 els.pet.addEventListener('pointermove', (e) => {
   if (!dragging) return;
   movedDist = Math.abs(e.screenX - downSX) + Math.abs(e.screenY - downSY);
-  if (movedDist > 4) window.api.movePetTo(e.screenX - grabX, e.screenY - grabY);
+  if (movedDist > 4) window.api.dragMove(e.screenX, e.screenY);
 });
 els.pet.addEventListener('pointerup', (e) => {
   if (!dragging) return;
   dragging = false;
+  window.api.dragEnd();
   try { els.pet.releasePointerCapture(e.pointerId); } catch (err) {}
   if (e.button === 0 && movedDist <= 4) onPetClick(); // 几乎没动 = 点击
+});
+
+// ---- 鼠标穿透：只有指针在宠物/菜单上时才接管点击，其余时间点得到桌面 ----
+let interactive = false;
+function overInteractive(x, y) {
+  if (menuOpen) return true; // 菜单开着时整窗可点：按钮可用、点空白可收起
+  const r = els.pet.getBoundingClientRect();
+  return r.width > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+document.addEventListener('mousemove', (e) => {
+  if (dragging) return; // 拖动时保持接管
+  const over = overInteractive(e.clientX, e.clientY);
+  if (over !== interactive) { interactive = over; window.api.setIgnoreMouse(!over); }
 });
 
 // 点菜单 / 宠物以外的地方 → 收起菜单

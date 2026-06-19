@@ -14,3 +14,4 @@ Add an entry whenever a non-obvious bug is fixed.
 | 桌宠只能在主屏范围内拖，到不了第二个显示器 | move-pet 把位置夹在 getPrimaryDisplay().workAreaSize 的 0..宽高 内 | 改夹在 getAllDisplays() 所有屏幕 bounds 的并集范围内，支持跨屏 | - |
 | 桌宠只能在下半屏拖、往上拖不动、往下会拖到消失 | 用普通 mouse 事件拖动，窗口跟随移动时鼠标一旦移出窗口范围就收不到 mousemove，拖拽中断（向上很快触顶丢事件） | 改用 pointerdown/move/up + setPointerCapture 捕获指针，全程不丢事件，跨屏可拖 | - |
 | 拖拽越拖越往下漂移、限制变多 | 用累加位移(delta)移动窗口，窗口移动会触发额外指针事件，误差累积漂移 | 改绝对定位：按下记抓取点，窗口左上角=当前鼠标-抓取点(move-pet-to)，不累加 | - |
+| 桌宠挡住桌面点击 / 拖拽漂移 | 透明窗口整块矩形拦截鼠标；拖拽偏移在渲染层靠 window.screenX 估算不准 | 默认 setIgnoreMouseEvents(true,{forward}) 穿透、指针在宠物/菜单上才接管；拖拽偏移改由主进程按 getPosition 计算(drag-start/move/end)绝对定位 | - |
