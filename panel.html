@@ -31,7 +31,7 @@
   }
   .card h2 { font-size: 13px; margin: 0 0 10px; color: var(--accent); }
   label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
-  input[type="text"], input[type="number"], textarea, select {
+  input[type="text"], input[type="password"], input[type="number"], textarea, select {
     width: 100%;
     background: #14151b;
     border: 1px solid var(--line);
@@ -141,7 +141,38 @@
     <textarea id="responses"></textarea>
     <label>闲置碎碎念（每行一句）</label>
     <textarea id="idleMessages"></textarea>
-    <div class="hint">配置 ANTHROPIC_API_KEY 环境变量后用大模型对话；未配置时使用下面的随机回应，离线也能用。</div>
+    <div class="hint">未配置模型 Key 时使用随机回应，离线也能用。</div>
+  </div>
+
+  <!-- 模型与记忆 -->
+  <div class="card">
+    <h2>模型与记忆</h2>
+    <label>接口类型</label>
+    <select id="aiProvider">
+      <option value="openai-compatible">OpenAI 兼容接口</option>
+      <option value="anthropic">Anthropic</option>
+    </select>
+    <label>Base URL</label>
+    <input type="text" id="aiBaseUrl" placeholder="https://api.openai.com/v1">
+    <label>API Key（本地保存，渲染层不可读取）</label>
+    <input type="password" id="apiKey" placeholder="留空则保持当前 Key 不变">
+    <div class="hint" id="apiKeyState"></div>
+    <button class="ghost" id="clearKeyBtn" style="margin-top:8px;">清除已保存 Key</button>
+    <label>模型名</label>
+    <input type="text" id="aiModel">
+    <div class="hint">OpenAI 兼容接口可接 OpenAI、DeepSeek、通义/智谱等兼容服务；填对应 Base URL、Key 和模型名即可。</div>
+    <label class="switch" style="margin-top:12px;">
+      <input type="checkbox" id="memoryEnabled" style="width:auto">
+      <span>开启本地记忆（最近对话 + 长期记忆）</span>
+    </label>
+    <div class="row" style="margin-top:8px;">
+      <div><label>最近对话轮数</label><input type="number" id="memoryTurns" min="1" max="20"></div>
+      <div><label>已保存对话</label><input type="text" id="memoryCount" disabled></div>
+    </div>
+    <label>长期记忆（每行一条，可查看、可删除）</label>
+    <textarea id="memoryNotes"></textarea>
+    <button class="ghost" id="clearMemoryBtn" style="margin-top:8px;">清空最近对话记忆</button>
+    <div class="hint">适合记住宠物名字、主人偏好、作息习惯等；敏感内容建议不要写入。</div>
   </div>
 
   <!-- 提醒 -->
@@ -423,6 +454,17 @@ function renderForm() {
   $('persona').value = config.persona || '';
   $('responses').value = (config.responses || []).join('\n');
   $('idleMessages').value = (config.idleMessages || []).join('\n');
+  const ai = config.ai || {};
+  $('aiProvider').value = ai.provider || 'openai-compatible';
+  $('aiBaseUrl').value = ai.baseUrl || ($('aiProvider').value === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1');
+  $('apiKey').value = '';
+  $('apiKeyState').textContent = ai.hasApiKey ? '已保存 Key；留空保存不会覆盖。' : '未保存 Key；不填则使用离线随机回应。';
+  $('aiModel').value = ai.model || ($('aiProvider').value === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini');
+  const memory = config.memory || {};
+  $('memoryEnabled').checked = memory.enabled !== false;
+  $('memoryTurns').value = memory.maxTurns || 8;
+  $('memoryCount').value = `${((memory.chatHistory || []).length / 2).toFixed(0)} 轮`;
+  $('memoryNotes').value = (memory.notes || []).join('\n');
   const p = config.pomodoro || {};
   $('pomoEnabled').checked = !!p.enabled;
   $('workMinutes').value = p.workMinutes || 25;
@@ -461,6 +503,17 @@ function renderTrust() {
 }
 
 $('clearTraceBtn').onclick = async () => { config = await window.api.clearTrace(); renderTrust(); };
+$('clearMemoryBtn').onclick = async () => { config = await window.api.clearMemory(); renderAll(); };
+$('clearKeyBtn').onclick = async () => { config = await window.api.clearAiKey(); renderAll(); };
+$('aiProvider').onchange = () => {
+  if ($('aiProvider').value === 'anthropic') {
+    $('aiBaseUrl').value = 'https://api.anthropic.com/v1';
+    if (!$('aiModel').value || $('aiModel').value === 'gpt-4o-mini') $('aiModel').value = 'claude-haiku-4-5-20251001';
+  } else {
+    $('aiBaseUrl').value = 'https://api.openai.com/v1';
+    if (!$('aiModel').value || $('aiModel').value === 'claude-haiku-4-5-20251001') $('aiModel').value = 'gpt-4o-mini';
+  }
+};
 
 function renderAll() { renderLibrary(); renderPets(); renderForm(); renderTrust(); }
 
@@ -473,6 +526,17 @@ $('saveBtn').onclick = async () => {
     persona: $('persona').value,
     responses: lines($('responses').value),
     idleMessages: lines($('idleMessages').value),
+    ai: {
+      provider: $('aiProvider').value,
+      baseUrl: $('aiBaseUrl').value.trim(),
+      model: $('aiModel').value.trim() || ($('aiProvider').value === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini'),
+      apiKey: $('apiKey').value.trim()
+    },
+    memory: {
+      enabled: $('memoryEnabled').checked,
+      maxTurns: +$('memoryTurns').value || 8,
+      notesText: $('memoryNotes').value
+    },
     pomodoro: {
       enabled: $('pomoEnabled').checked,
       workMinutes: +$('workMinutes').value,

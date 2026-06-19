@@ -1,6 +1,6 @@
 {
   "name": "deskpet",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "把你的宠物变成陪你上班的桌面伙伴 —— 可信、可换皮、可扩展的桌宠 Agent",
   "main": "main.js",
   "author": "Andrew-JX",
@@ -28,16 +28,19 @@
     },
     "files": [
       "main.js",
+      "intent.js",
       "preload.js",
       "pet.html",
       "panel.html",
-      "package.json"
+      "package.json",
+      "samples/**"
     ],
     "win": {
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,

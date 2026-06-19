@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('api', {
   statEvent: (kind) => ipcRenderer.invoke('stat-event', kind),
   toggleTodo: (id) => ipcRenderer.invoke('toggle-todo', id),
   clearTrace: () => ipcRenderer.invoke('clear-trace'),
+  clearMemory: () => ipcRenderer.invoke('clear-memory'),
+  clearAiKey: () => ipcRenderer.invoke('clear-ai-key'),
   readMedia: (file) => ipcRenderer.invoke('read-media', file),
   readAssetData: (id) => ipcRenderer.invoke('read-asset-data', id),
 

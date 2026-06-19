@@ -59,10 +59,21 @@ function defaultConfig() {
       workEndMessage: '一个番茄钟到啦，站起来活动 5 分钟吧！',
       sitMessage: '已经坐了好久啦，起来走两步，我陪你～'
     },
-    // AI 配置：provider 与 model；apiKey 永远不写进 config，只从环境变量读。
+    // AI 配置：apiKey 可由用户保存在本机 config，但只在主进程使用，永不下发给渲染层。
     ai: {
-      provider: 'anthropic',
-      model: 'claude-haiku-4-5-20251001'
+      provider: 'openai-compatible',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4o-mini',
+      apiKey: ''
+    },
+    memory: {
+      enabled: true,
+      maxTurns: 8,
+      notes: [
+        '主人希望桌宠回答简短、温暖，像真实宠物一样陪伴工作。',
+        '涉及待办、设置等写操作时，必须先让主人确认。'
+      ],
+      chatHistory: []
     },
     // —— 确定性数据（由主进程计算，不交给 AI）——
     stats: { date: '', focusMinutes: 0, pomodorosDone: 0, interactions: 0 },
@@ -103,6 +114,20 @@ function normalizeConfig(cfg) {
     if (!a.events || typeof a.events !== 'object') a.events = {}; // 系统动作素材：click/chat/pomodoro/sit
     delete a.actions; delete a.stateMap; delete a.frameCount; delete a.animated; delete a.path;
   });
+  if (!cfg.ai || typeof cfg.ai !== 'object') cfg.ai = {};
+  if (!cfg.ai.provider) cfg.ai.provider = 'openai-compatible';
+  if (!cfg.ai.baseUrl) cfg.ai.baseUrl = cfg.ai.provider === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1';
+  if (!cfg.ai.model) cfg.ai.model = cfg.ai.provider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini';
+  if (typeof cfg.ai.apiKey !== 'string') cfg.ai.apiKey = '';
+  if (!cfg.memory || typeof cfg.memory !== 'object') cfg.memory = {};
+  if (cfg.memory.enabled == null) cfg.memory.enabled = true;
+  if (!Number.isFinite(+cfg.memory.maxTurns)) cfg.memory.maxTurns = 8;
+  cfg.memory.maxTurns = Math.max(1, Math.min(20, +cfg.memory.maxTurns || 8));
+  if (!Array.isArray(cfg.memory.notes)) cfg.memory.notes = [];
+  if (!Array.isArray(cfg.memory.chatHistory)) cfg.memory.chatHistory = [];
+  cfg.memory.chatHistory = cfg.memory.chatHistory
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-cfg.memory.maxTurns * 2);
   delete cfg.buttons;
   return cfg;
 }
@@ -162,6 +187,10 @@ let panelWindow = null;
 function publicConfig() {
   if (!config) return config;
   const clone = JSON.parse(JSON.stringify(config));
+  if (clone.ai) {
+    clone.ai.hasApiKey = !!((config.ai && config.ai.apiKey) || process.env.ANTHROPIC_API_KEY);
+    clone.ai.apiKey = '';
+  }
   clone.assets = (clone.assets || []).map((a) => ({
     ...a,
     url: a.file ? pathToFileURL(path.join(USER_MEDIA_DIR, a.file)).href : null
@@ -248,29 +277,89 @@ function templateForResult(tool, result, args) {
 
 let pendingProposals = {}; // id -> { tool, args }
 
+function aiKey() {
+  return (config.ai && config.ai.apiKey) || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+}
+
+function aiProvider() {
+  return (config.ai && config.ai.provider) || 'openai-compatible';
+}
+
+function aiBaseUrl() {
+  const raw = (config.ai && config.ai.baseUrl) || (aiProvider() === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1');
+  return String(raw).replace(/\/+$/, '');
+}
+
+function memorySettings() {
+  normalizeConfig(config);
+  return config.memory;
+}
+
+function appendChatMemory(userText, assistantText) {
+  const memory = memorySettings();
+  if (!memory.enabled) return;
+  memory.chatHistory.push({ role: 'user', content: String(userText || '').slice(0, 1000) });
+  memory.chatHistory.push({ role: 'assistant', content: String(assistantText || '').slice(0, 1000) });
+  memory.chatHistory = memory.chatHistory.slice(-memory.maxTurns * 2);
+  saveConfig(config);
+  broadcastConfig();
+}
+
+function memoryContextNote() {
+  const memory = memorySettings();
+  if (!memory.enabled) return '';
+  const notes = (memory.notes || []).map((s) => String(s).trim()).filter(Boolean);
+  if (!notes.length) return '';
+  return `\n\n【长期记忆】\n${notes.map((s) => `- ${s}`).join('\n')}`;
+}
+
 // 用模型把"工具结果/闲聊"包装成符合人设的一句话；失败/无 Key 返回 null
 async function modelWrap(userText, contextNote) {
-  const key = process.env.ANTHROPIC_API_KEY;
+  const key = aiKey();
   if (!key) return null;
   let system = config.persona || '你是一只陪伴用户的桌面宠物，简短温暖。';
   if (config.memorialMode) {
     system += '\n\n【纪念模式】你是带着已离开宠物形象的温柔陪伴者，不冒充本体、不消费悲伤。';
   }
+  system += memoryContextNote();
   if (contextNote) system += `\n\n【可用事实，只能基于它回答，不要编造】${contextNote}`;
+  const memory = memorySettings();
+  const history = memory.enabled ? (memory.chatHistory || []).slice(-memory.maxTurns * 2) : convoHistory.slice(-6);
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: (config.ai && config.ai.model) || 'claude-haiku-4-5-20251001',
-        max_tokens: 150,
-        system,
-        messages: [...convoHistory.slice(-6), { role: 'user', content: userText }]
-      })
-    });
+    const provider = aiProvider();
+    const model = (config.ai && config.ai.model) || (provider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini');
+    let resp;
+    if (provider === 'anthropic') {
+      resp = await fetch(`${aiBaseUrl()}/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model,
+          max_tokens: 150,
+          system,
+          messages: [...history, { role: 'user', content: userText }]
+        })
+      });
+    } else {
+      resp = await fetch(`${aiBaseUrl()}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model,
+          max_tokens: 150,
+          messages: [
+            { role: 'system', content: system },
+            ...history,
+            { role: 'user', content: userText }
+          ]
+        })
+      });
+    }
     if (!resp.ok) return null;
     const data = await resp.json();
-    return (data.content && data.content[0] && data.content[0].text) || null;
+    return provider === 'anthropic'
+      ? ((data.content && data.content[0] && data.content[0].text) || null)
+      : ((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || null);
   } catch (e) {
     console.error('modelWrap 异常:', e);
     return null;
@@ -406,10 +495,22 @@ function removeMediaFile(file) {
 }
 
 ipcMain.handle('save-config', (_e, partial) => {
-  config = Object.assign(config, partial);
+  const next = Object.assign({}, partial);
+  if (next.ai && typeof next.ai === 'object') {
+    next.ai = Object.assign({}, config.ai || {}, next.ai);
+    if (!next.ai.apiKey && config.ai && config.ai.apiKey) next.ai.apiKey = config.ai.apiKey;
+  }
+  if (next.memory && typeof next.memory === 'object') {
+    next.memory = Object.assign({}, config.memory || {}, next.memory);
+    if (typeof next.memory.notesText === 'string') {
+      next.memory.notes = next.memory.notesText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      delete next.memory.notesText;
+    }
+  }
+  config = normalizeConfig(Object.assign(config, next));
   saveConfig(config);
   broadcastConfig();
-  return config;
+  return publicConfig();
 });
 
 ipcMain.handle('open-panel', () => {
@@ -644,7 +745,8 @@ ipcMain.handle('ai-chat', async (_e, userText) => {
       text = pool[Math.floor(Math.random() * pool.length)];
     }
     convoHistory.push({ role: 'assistant', content: text });
-    logTrace({ tool: 'chat', args: {}, status: 'replied', source: process.env.ANTHROPIC_API_KEY ? 'model' : 'fallback' });
+    appendChatMemory(userText, text);
+    logTrace({ tool: 'chat', args: {}, status: 'replied', source: aiKey() ? 'model' : 'fallback' });
     return { text, source: 'chat' };
   }
 
@@ -655,10 +757,11 @@ ipcMain.handle('ai-chat', async (_e, userText) => {
     const id = 'p_' + Date.now();
     pendingProposals[id] = { tool: route.tool, args: route.args };
     logTrace({ tool: route.tool, args: route.args, status: 'proposed', source: 'router' });
-    const preview =
+  const preview =
       route.tool === 'add_todo' ? `要我帮你记下「${route.args.text}」吗？`
       : route.tool === 'complete_todo' ? `把「${route.args.text}」标记为完成？`
       : `要执行 ${tool.desc} 吗？`;
+    appendChatMemory(userText, preview);
     return { text: preview, proposal: { id, tool: route.tool, desc: tool.desc }, source: 'proposal' };
   }
 
@@ -669,6 +772,7 @@ ipcMain.handle('ai-chat', async (_e, userText) => {
   let text = await modelWrap(userText, factNote);
   if (!text) text = templateForResult(route.tool, result, route.args);
   convoHistory.push({ role: 'assistant', content: text });
+  appendChatMemory(userText, text);
   return { text, source: 'tool-read' };
 });
 
@@ -704,6 +808,19 @@ ipcMain.handle('toggle-todo', (_e, id) => {
 });
 ipcMain.handle('clear-trace', () => {
   config.trace = [];
+  saveConfig(config);
+  broadcastConfig();
+  return publicConfig();
+});
+ipcMain.handle('clear-memory', () => {
+  memorySettings().chatHistory = [];
+  saveConfig(config);
+  broadcastConfig();
+  return publicConfig();
+});
+ipcMain.handle('clear-ai-key', () => {
+  config.ai = config.ai || {};
+  config.ai.apiKey = '';
   saveConfig(config);
   broadcastConfig();
   return publicConfig();
