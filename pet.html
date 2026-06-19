@@ -250,15 +250,19 @@ function idleMaterial() {
 function showIdle() { playingInterId = null; playMaterial(idleMaterial()); }
 
 // 播放一段素材：图片精灵图（抠绿幕+切帧）或视频（逐帧抠绿幕）
+// 关键：切换时保持当前画面，等新素材加载好再替换，避免中间闪一下空/占位
+let loadToken = 0;
 async function playMaterial(mat) {
-  stopVideo();
-  processedCanvas = null;
-  if (!mat || !mat.file) { showPlaceholder(); return; }
-  if (mat.type === 'video') { setupVideo(mat.file); return; }
+  const myToken = ++loadToken;
+  if (!mat || !mat.file) { stopVideo(); processedCanvas = null; showPlaceholder(); return; }
+  if (mat.type === 'video') { stopVideo(); processedCanvas = null; setupVideo(mat.file); return; }
   const dataUrl = await window.api.readMedia(mat.file);
-  if (!dataUrl) { showPlaceholder(); return; }
+  if (myToken !== loadToken) return;            // 期间又切了别的，丢弃这次
+  if (!dataUrl) { stopVideo(); processedCanvas = null; showPlaceholder(); return; }
   const img = new Image();
   img.onload = () => {
+    if (myToken !== loadToken) return;
+    stopVideo();                                 // 新图就绪后才停旧视频/换画面
     processedCanvas = chromaKey(img);
     matCols = mat.cols || 1; matRows = mat.rows || 1;
     matFrames = (mat.frames && mat.frames.length) ? mat.frames : [0];
@@ -272,7 +276,7 @@ async function playMaterial(mat) {
     els.canvas.classList.add('breathing'); // 静帧才需要“呼吸”
     drawFrame();
   };
-  img.onerror = () => showPlaceholder();
+  img.onerror = () => { if (myToken === loadToken) { stopVideo(); processedCanvas = null; showPlaceholder(); } };
   img.src = dataUrl;
 }
 
