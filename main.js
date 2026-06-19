@@ -304,6 +304,9 @@ function createPetWindow() {
 
   petWindow.setAlwaysOnTop(true, 'screen-saver');
   petWindow.setBounds(bounds);
+  petWindow.webContents.on('console-message', (_e, level, message) => {
+    if (level >= 2) console.log('[pet]', message); // 把渲染层 warn/error 转到主进程日志
+  });
   petWindow.loadFile('pet.html');
   // 默认鼠标穿透（forward 让窗口仍能收到移动事件，用于检测指针进入宠物）
   petWindow.webContents.once('did-finish-load', () => {

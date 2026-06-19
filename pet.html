@@ -255,10 +255,14 @@ let loadToken = 0;
 async function playMaterial(mat) {
   const myToken = ++loadToken;
   if (!mat || !mat.file) { stopVideo(); processedCanvas = null; showPlaceholder(); return; }
-  if (mat.type === 'video') { stopVideo(); processedCanvas = null; setupVideo(mat.file); return; }
+  if (mat.type === 'video') { setupVideo(mat.file); return; } // setupVideo 就绪后才切，期间保持当前画面
   const dataUrl = await window.api.readMedia(mat.file);
   if (myToken !== loadToken) return;            // 期间又切了别的，丢弃这次
-  if (!dataUrl) { stopVideo(); processedCanvas = null; showPlaceholder(); return; }
+  if (!dataUrl) {                               // 读不到就保持当前画面，不闪占位
+    console.warn('readMedia 失败:', mat.file);
+    if (!processedCanvas && !isVideo) showPlaceholder();
+    return;
+  }
   const img = new Image();
   img.onload = () => {
     if (myToken !== loadToken) return;
@@ -276,26 +280,37 @@ async function playMaterial(mat) {
     els.canvas.classList.add('breathing'); // 静帧才需要“呼吸”
     drawFrame();
   };
-  img.onerror = () => { if (myToken === loadToken) { stopVideo(); processedCanvas = null; showPlaceholder(); } };
+  img.onerror = () => {
+    if (myToken !== loadToken) return;
+    console.warn('图片加载失败:', mat.file);
+    if (!processedCanvas && !isVideo) showPlaceholder();
+  };
   img.src = dataUrl;
 }
 
 // ---- 视频：逐帧实时抠绿幕播放（绿底循环视频 → 透明、丝滑、真动）----
+// 新视频「首帧就绪」后才切换，期间保持当前画面，避免重载时闪占位/默认狗。
 async function setupVideo(file) {
+  const myToken = ++loadToken;
   const dataUrl = await window.api.readMedia(file);
-  if (!dataUrl) { showPlaceholder(); return; }
-  videoEl = document.createElement('video');
-  videoEl.muted = true; videoEl.loop = true; videoEl.autoplay = true; videoEl.playsInline = true;
-  videoEl.addEventListener('loadeddata', () => {
+  if (myToken !== loadToken) return;
+  if (!dataUrl) { console.warn('视频读取失败:', file); if (!processedCanvas && !isVideo) showPlaceholder(); return; }
+  const v = document.createElement('video');
+  v.muted = true; v.loop = true; v.autoplay = true; v.playsInline = true;
+  v.addEventListener('loadeddata', () => {
+    if (myToken !== loadToken) { try { v.pause(); } catch (e) {} return; }
+    stopVideo();              // 停旧视频（若有）
+    processedCanvas = null;   // 切到视频
+    videoEl = v;
+    isVideo = true;
     sizeCanvas();
     els.placeholder.style.display = 'none';
     els.canvas.style.display = 'block';
-    els.canvas.classList.remove('breathing'); // 视频自己会动，不需要呼吸
-    isVideo = true;
-    videoEl.play().catch(() => {});
+    els.canvas.classList.remove('breathing');
+    v.play().catch(() => {});
   });
-  videoEl.onerror = () => showPlaceholder();
-  videoEl.src = dataUrl;
+  v.onerror = () => { console.warn('视频加载失败:', file); };
+  v.src = dataUrl;
 }
 
 function drawVideoFrame() {
@@ -405,17 +420,16 @@ function onPetClick() {
 // ---- 宠物在窗口内的位置（纯 CSS，窗口本身不动 → 零漂移）----
 let stageLeft = 0, stageTop = 0;
 function setStagePos(left, top) {
-  // 夹边界：保证宠物本体始终在可视范围内，可到达上下左右任意边缘
-  const sr = els.stage.getBoundingClientRect();
+  // 先放上去，再量本体真实位置，越界了才往回拉 —— 能精确贴到任意边缘
+  els.stage.style.left = left + 'px';
+  els.stage.style.top = top + 'px';
   const pr = els.pet.getBoundingClientRect();
-  const offX = pr.left - sr.left, offY = pr.top - sr.top;        // 本体在小组内的偏移
-  const pw = pr.width || (config?.petSize || 180);
-  const ph = pr.height || (config?.petSize || 180);
   const vw = window.innerWidth, vh = window.innerHeight;
-  stageLeft = Math.max(-offX, Math.min(vw - offX - pw, left));
-  stageTop = Math.max(-offY, Math.min(vh - offY - ph, top));
-  els.stage.style.left = stageLeft + 'px';
-  els.stage.style.top = stageTop + 'px';
+  let ax = 0, ay = 0;
+  if (pr.left < 0) ax = -pr.left; else if (pr.right > vw) ax = vw - pr.right;
+  if (pr.top < 0) ay = -pr.top; else if (pr.bottom > vh) ay = vh - pr.bottom;
+  if (ax || ay) { left += ax; top += ay; els.stage.style.left = left + 'px'; els.stage.style.top = top + 'px'; }
+  stageLeft = left; stageTop = top;
 }
 
 // ---- 手动拖动 + 点击判定（全部在窗口坐标系内，不移动 OS 窗口）----
