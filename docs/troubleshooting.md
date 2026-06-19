@@ -12,3 +12,4 @@ Add an entry whenever a non-obvious bug is fixed.
 | 素材库橙色裁剪框四条边拖不动 | 可见边框设了 pointer-events:none，真正抓取条只有 8px 且压在图片边界、被 overflow:hidden 裁掉 | 去掉 overflow:hidden；抓取条加粗到 12px 贴框内侧并加半透明橙色背景，可见可抓 | - |
 | 切换素材/触发互动时画面闪一下（出现旧豆豆或空白） | playMaterial 切换时先把 processedCanvas 置空再异步加载新图，中间一帧无图；且示例豆豆的互动/点击事件绑在豆豆帧上 | 改为新图加载好再替换、加 loadToken 防竞态，保持旧画面无缝；移除自动播种示例宠物 | - |
 | 桌宠只能在主屏范围内拖，到不了第二个显示器 | move-pet 把位置夹在 getPrimaryDisplay().workAreaSize 的 0..宽高 内 | 改夹在 getAllDisplays() 所有屏幕 bounds 的并集范围内，支持跨屏 | - |
+| 桌宠只能在下半屏拖、往上拖不动、往下会拖到消失 | 用普通 mouse 事件拖动，窗口跟随移动时鼠标一旦移出窗口范围就收不到 mousemove，拖拽中断（向上很快触顶丢事件） | 改用 pointerdown/move/up + setPointerCapture 捕获指针，全程不丢事件，跨屏可拖 | - |

@@ -402,14 +402,15 @@ function onPetClick() {
   }
 }
 
-// ---- 手动拖动 + 点击判定：拖动时静默移动，几乎没动才算点击 ----
+// ---- 手动拖动 + 点击判定（用 pointer 捕获，拖到屏幕任何位置都不丢事件）----
 let dragging = false, lastSX = 0, lastSY = 0, movedDist = 0;
-els.pet.addEventListener('mousedown', (e) => {
+els.pet.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   dragging = true; movedDist = 0; lastSX = e.screenX; lastSY = e.screenY;
+  try { els.pet.setPointerCapture(e.pointerId); } catch (err) {}
   e.preventDefault();
 });
-document.addEventListener('mousemove', (e) => {
+els.pet.addEventListener('pointermove', (e) => {
   if (!dragging) return;
   const dx = e.screenX - lastSX, dy = e.screenY - lastSY;
   if (dx || dy) {
@@ -418,9 +419,10 @@ document.addEventListener('mousemove', (e) => {
     lastSX = e.screenX; lastSY = e.screenY;
   }
 });
-document.addEventListener('mouseup', (e) => {
+els.pet.addEventListener('pointerup', (e) => {
   if (!dragging) return;
   dragging = false;
+  try { els.pet.releasePointerCapture(e.pointerId); } catch (err) {}
   if (e.button === 0 && movedDist <= 4) onPetClick(); // 几乎没动 = 点击
 });
 
