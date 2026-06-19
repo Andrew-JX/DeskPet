@@ -605,11 +605,16 @@ ipcMain.handle('delete-library-media', (_e, libId) => {
 ipcMain.handle('move-pet', (_e, dx, dy) => {
   if (!petWindow || petWindow.isDestroyed()) return;
   const [x, y] = petWindow.getPosition();
-  const display = screen.getPrimaryDisplay();
-  const { width, height } = display.workAreaSize;
   const [w, h] = petWindow.getSize();
-  const nx = Math.max(0, Math.min(width - w, x + dx));
-  const ny = Math.max(0, Math.min(height - h, y + dy));
+  // 夹在「所有屏幕」的并集范围内 —— 支持多显示器跨屏拖动，又不会拖丢
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const d of screen.getAllDisplays()) {
+    const b = d.bounds;
+    minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.width); maxY = Math.max(maxY, b.y + b.height);
+  }
+  const nx = Math.max(minX, Math.min(maxX - w, x + dx));
+  const ny = Math.max(minY, Math.min(maxY - h, y + dy));
   petWindow.setPosition(Math.round(nx), Math.round(ny));
 });
 
