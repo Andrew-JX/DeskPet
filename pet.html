@@ -18,14 +18,13 @@
     -webkit-user-select: none;
     user-select: none;
   }
+  /* 宠物整体（气泡+本体+菜单）作为一个可移动的小组，在全屏窗口内用 left/top 定位 */
   #stage {
     position: absolute;
-    left: 0; right: 0; bottom: 0;
+    left: 0; top: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-end;
-    height: 100%;
   }
 
   /* 气泡 */
@@ -183,6 +182,7 @@ let playingInterId = null;     // 正在播放的互动 id；null = 待机
 let returnTimer = null;
 
 const els = {
+  stage: document.getElementById('stage'),
   bubble: document.getElementById('bubble'),
   pet: document.getElementById('pet'),
   canvas: document.getElementById('petCanvas'),
@@ -349,15 +349,15 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 
-// ---- 偶尔散步（移动窗口），待机且近期无互动时才走 ----
+// ---- 偶尔散步（CSS 横向移动），待机且近期无互动时才走 ----
 setInterval(() => {
-  if (playingInterId) return;
+  if (playingInterId || menuOpen || dragging) return;
   if (Date.now() - lastInteraction < 6000) return;
   if (Math.random() < 0.35) {
     let steps = 0;
     const dir = Math.random() < 0.5 ? -1 : 1;
     const walk = setInterval(() => {
-      window.api.movePet(dir * 8, 0);
+      setStagePos(stageLeft + dir * 8, stageTop);
       if (++steps > 10) clearInterval(walk);
     }, 90);
   }
@@ -402,25 +402,39 @@ function onPetClick() {
   }
 }
 
-// ---- 手动拖动 + 点击判定 ----
-// 偏移量由主进程按窗口真实位置计算（drag-start 记录，drag-move 绝对定位），零漂移。
-let dragging = false, downSX = 0, downSY = 0, movedDist = 0;
+// ---- 宠物在窗口内的位置（纯 CSS，窗口本身不动 → 零漂移）----
+let stageLeft = 0, stageTop = 0;
+function setStagePos(left, top) {
+  // 夹边界：保证宠物本体始终在可视范围内，可到达上下左右任意边缘
+  const sr = els.stage.getBoundingClientRect();
+  const pr = els.pet.getBoundingClientRect();
+  const offX = pr.left - sr.left, offY = pr.top - sr.top;        // 本体在小组内的偏移
+  const pw = pr.width || (config?.petSize || 180);
+  const ph = pr.height || (config?.petSize || 180);
+  const vw = window.innerWidth, vh = window.innerHeight;
+  stageLeft = Math.max(-offX, Math.min(vw - offX - pw, left));
+  stageTop = Math.max(-offY, Math.min(vh - offY - ph, top));
+  els.stage.style.left = stageLeft + 'px';
+  els.stage.style.top = stageTop + 'px';
+}
+
+// ---- 手动拖动 + 点击判定（全部在窗口坐标系内，不移动 OS 窗口）----
+let dragging = false, grabX = 0, grabY = 0, downX = 0, downY = 0, movedDist = 0;
 els.pet.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
-  dragging = true; movedDist = 0; downSX = e.screenX; downSY = e.screenY;
-  window.api.dragStart(e.screenX, e.screenY);
+  dragging = true; movedDist = 0; downX = e.clientX; downY = e.clientY;
+  grabX = e.clientX - stageLeft; grabY = e.clientY - stageTop;   // 鼠标相对小组左上角
   try { els.pet.setPointerCapture(e.pointerId); } catch (err) {}
   e.preventDefault();
 });
 els.pet.addEventListener('pointermove', (e) => {
   if (!dragging) return;
-  movedDist = Math.abs(e.screenX - downSX) + Math.abs(e.screenY - downSY);
-  if (movedDist > 4) window.api.dragMove(e.screenX, e.screenY);
+  movedDist = Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY);
+  if (movedDist > 4) setStagePos(e.clientX - grabX, e.clientY - grabY);
 });
 els.pet.addEventListener('pointerup', (e) => {
   if (!dragging) return;
   dragging = false;
-  window.api.dragEnd();
   try { els.pet.releasePointerCapture(e.pointerId); } catch (err) {}
   if (e.button === 0 && movedDist <= 4) onPetClick(); // 几乎没动 = 点击
 });
@@ -575,6 +589,13 @@ async function init() {
   sizeCanvas();
   loadCurrentPet();
   requestAnimationFrame(tick);
+  // 初始放到主屏右下角
+  try {
+    const L = await window.api.getLayout();
+    const sw = els.stage.offsetWidth || ((config?.petSize || 180) + 40);
+    const sh = els.stage.offsetHeight || ((config?.petSize || 180) + 60);
+    setStagePos(L.primary.x + L.primary.w - sw - 40, L.primary.y + L.primary.h - sh - 30);
+  } catch (e) { setStagePos(window.innerWidth - 240, window.innerHeight - 280); }
   // 开场打个招呼
   setTimeout(() => say(`嗨我是${currentAsset?.name || config?.petName || '它'}~ 点我有反应、拖我换位置，点 ⚙ 能换成你自己的宠物`, 6000), 800);
 }

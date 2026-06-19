@@ -281,17 +281,17 @@ async function modelWrap(userText, contextNote) {
 // 窗口
 // ---------------------------------------------------------------------------
 function createPetWindow() {
-  const size = (config && config.petSize) || 180;
-  // 让窗口比宠物本体略大，给气泡留出空间
-  const winW = size + 60;
-  const winH = size + 120;
+  // 窗口覆盖「所有显示器的并集」并固定不动——宠物在窗口内用 CSS 移动，
+  // 从根上避免移动 OS 窗口带来的边界/DPI/漂移问题，且可跨屏到任意位置。
+  const u = unionBounds();
+  const bounds = { x: u.minX, y: u.minY, width: u.maxX - u.minX, height: u.maxY - u.minY };
 
   petWindow = new BrowserWindow({
-    width: winW,
-    height: winH,
+    ...bounds,
     transparent: true,
     frame: false,
     resizable: false,
+    movable: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     hasShadow: false,
@@ -303,16 +303,12 @@ function createPetWindow() {
   });
 
   petWindow.setAlwaysOnTop(true, 'screen-saver');
+  petWindow.setBounds(bounds);
   petWindow.loadFile('pet.html');
   // 默认鼠标穿透（forward 让窗口仍能收到移动事件，用于检测指针进入宠物）
   petWindow.webContents.once('did-finish-load', () => {
     if (petWindow && !petWindow.isDestroyed()) petWindow.setIgnoreMouseEvents(true, { forward: true });
   });
-
-  // 默认放到屏幕右下角
-  const display = screen.getPrimaryDisplay();
-  const { width, height } = display.workAreaSize;
-  petWindow.setPosition(width - winW - 40, height - winH - 40);
 
   petWindow.on('closed', () => {
     petWindow = null;
@@ -418,13 +414,8 @@ ipcMain.handle('open-panel', () => {
 });
 
 ipcMain.handle('set-pet-size', (_e, size) => {
-  config.petSize = size;
+  config.petSize = size;          // 窗口覆盖全屏不变，大小只影响 CSS 里宠物本体
   saveConfig(config);
-  if (petWindow && !petWindow.isDestroyed()) {
-    const winW = size + 60;
-    const winH = size + 120;
-    petWindow.setSize(winW, winH);
-  }
   broadcastConfig();
   return config;
 });
@@ -617,35 +608,17 @@ function unionBounds() {
   return { minX, minY, maxX, maxY };
 }
 
-// 相对移动（散步用）
-ipcMain.handle('move-pet', (_e, dx, dy) => {
-  if (!petWindow || petWindow.isDestroyed()) return;
-  const [x, y] = petWindow.getPosition();
-  movePetTo(x + dx, y + dy);
-});
-
-// 绝对移动（拖拽用）：窗口左上角直接放到 (x,y)，不累加、不漂移
-function movePetTo(x, y) {
-  if (!petWindow || petWindow.isDestroyed()) return;
-  const [w, h] = petWindow.getSize();
+// 窗口覆盖整个虚拟桌面、固定不动；宠物在窗口内用 CSS 定位移动。
+// 渲染层据此把宠物初始放到主屏右下角（坐标相对窗口左上角，即并集原点）。
+ipcMain.handle('get-layout', () => {
   const u = unionBounds();
-  const nx = Math.max(u.minX, Math.min(u.maxX - w, x));
-  const ny = Math.max(u.minY, Math.min(u.maxY - h, y));
-  petWindow.setPosition(Math.round(nx), Math.round(ny));
-}
-ipcMain.handle('move-pet-to', (_e, x, y) => movePetTo(x, y));
-
-// 拖拽：抓取偏移在主进程按「窗口真实位置」算，绝对定位、零漂移
-let dragOffset = null;
-ipcMain.handle('drag-start', (_e, sx, sy) => {
-  if (!petWindow || petWindow.isDestroyed()) { dragOffset = null; return; }
-  const [wx, wy] = petWindow.getPosition();
-  dragOffset = { dx: wx - sx, dy: wy - sy };
+  const p = screen.getPrimaryDisplay().workArea; // 主屏工作区（屏幕坐标）
+  return {
+    width: u.maxX - u.minX,
+    height: u.maxY - u.minY,
+    primary: { x: p.x - u.minX, y: p.y - u.minY, w: p.width, h: p.height }
+  };
 });
-ipcMain.handle('drag-move', (_e, sx, sy) => {
-  if (dragOffset) movePetTo(sx + dragOffset.dx, sy + dragOffset.dy);
-});
-ipcMain.handle('drag-end', () => { dragOffset = null; });
 
 // 鼠标穿透：true=点得到桌面（穿透），false=接管点击。指针在宠物/菜单上才接管。
 ipcMain.handle('set-ignore-mouse', (_e, ignore) => {

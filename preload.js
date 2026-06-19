@@ -29,11 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   saveCroppedFrame: (name, dataUrl) => ipcRenderer.invoke('save-cropped-frame', name, dataUrl),
   deleteLibraryMedia: (libId) => ipcRenderer.invoke('delete-library-media', libId),
 
-  movePet: (dx, dy) => ipcRenderer.invoke('move-pet', dx, dy),
-  movePetTo: (x, y) => ipcRenderer.invoke('move-pet-to', x, y),
-  dragStart: (x, y) => ipcRenderer.invoke('drag-start', x, y),
-  dragMove: (x, y) => ipcRenderer.invoke('drag-move', x, y),
-  dragEnd: () => ipcRenderer.invoke('drag-end'),
+  getLayout: () => ipcRenderer.invoke('get-layout'),
   setIgnoreMouse: (ignore) => ipcRenderer.invoke('set-ignore-mouse', ignore),
   aiChat: (text) => ipcRenderer.invoke('ai-chat', text),
   confirmTool: (id, ok) => ipcRenderer.invoke('confirm-tool', id, ok),
